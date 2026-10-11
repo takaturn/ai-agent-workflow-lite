@@ -22,7 +22,8 @@ case "$1 $2" in
   'agent start'|'agent prompt')
     exit 0 ;;
   'agent get')
-    printf '%s\n' '{"result":{"agent":{"agent_status":"idle","tokens":{"input_tokens":"120","output_tokens":"30"}}}}' ;;
+    jq -n --arg status "${TEST_AGENT_STATUS:-idle}" \
+      '{result:{agent:{agent_status:$status,tokens:{input_tokens:"120",output_tokens:"30"}}}}' ;;
   'agent read')
     printf '%s\n' 'result: done' 'changed: none' 'checks: not-run' 'risks: none' 'next: none' ;;
   *)
@@ -51,6 +52,22 @@ summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
 jq -e '.status == "returned" and .tier == "light" and .pane_id == "child" and .input_tokens == 120 and .output_tokens == 30' "$summary" >/dev/null
 [[ -z "$(git -C "$tmp/work" status --porcelain)" ]] || { echo 'FAIL: repo dirtied' >&2; exit 1; }
+
+# Herdr reports an unseen completion as done, which is also ready for input.
+(cd "$tmp/work" && TEST_AGENT_STATUS=done \
+  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/done-output")
+grep -q '^result: done' "$tmp/done-output"
+
+# Non-ready states must not reach the successful result read.
+for agent_status in working blocked unknown; do
+  if (cd "$tmp/work" && TEST_AGENT_STATUS="$agent_status" \
+    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    >"$tmp/refused-output" 2>"$tmp/refused-error"); then
+    echo "FAIL: $agent_status agent accepted" >&2; exit 1
+  fi
+  grep -q "agent is $agent_status" "$tmp/refused-error"
+  [[ ! -s "$tmp/refused-output" ]] || { echo 'FAIL: non-ready result read' >&2; exit 1; }
+done
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
