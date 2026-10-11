@@ -41,15 +41,18 @@ agent_name="${role}-$(date +%s)-$$"
 started="$(date +%s)"
 status=failed
 child_pane=
+input_tokens=null
+output_tokens=null
 finish() {
   rc=$?
   elapsed=$(( $(date +%s) - started ))
   jq -n --arg role "$role" --arg profile "$profile" --arg tier "$tier" \
     --arg model "$model" --arg pane "$child_pane" --arg status "$status" \
     --argjson exit_code "$rc" --argjson duration_seconds "$elapsed" \
+    --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" \
     '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
-      input_tokens:null,output_tokens:null}' >"$run_dir/summary.json" || true
+      input_tokens:$input_tokens,output_tokens:$output_tokens}' >"$run_dir/summary.json" || true
   printf 'Local summary: %s\n' "$run_dir/summary.json" >&2
 }
 trap finish EXIT
@@ -91,6 +94,15 @@ herdr agent prompt "$agent_name" "$instructions" --wait --timeout 600000 \
 
 agent_record="$(herdr agent get "$agent_name")" || die 'agent status inspection failed'
 agent_status="$(jq -er '.result.agent.agent_status' <<<"$agent_record")" || die 'agent status missing'
+# Herdr sometimes returns numeric token counts as strings. Record only valid counters.
+input_tokens="$(jq -er '(.result.agent.tokens.input_tokens // empty) |
+  if type=="string" and test("^[0-9]+$") then tonumber
+  elif type=="number" and . >= 0 then .
+  else empty end' <<<"$agent_record" 2>/dev/null)" || input_tokens=null
+output_tokens="$(jq -er '(.result.agent.tokens.output_tokens // empty) |
+  if type=="string" and test("^[0-9]+$") then tonumber
+  elif type=="number" and . >= 0 then .
+  else empty end' <<<"$agent_record" 2>/dev/null)" || output_tokens=null
 [[ "$agent_status" == idle ]] || die "agent is $agent_status, not idle; inspect pane"
 herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
 status=returned
