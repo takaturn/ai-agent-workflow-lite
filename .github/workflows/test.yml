@@ -1,0 +1,14 @@
+name: lightweight-checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mocked Herdr integration
+        run: bash tests/test-runner.sh
+      - name: Bash syntax
+        run: bash -n scripts/*.sh tests/*.sh
