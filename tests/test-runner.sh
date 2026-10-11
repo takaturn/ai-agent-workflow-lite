@@ -37,6 +37,12 @@ test "$(bash "$base/scripts/herdr-context.sh")" = parent
 if HERDR_ENV=0 bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: missing Herdr context accepted' >&2; exit 1
 fi
+if HERDR_PANE_ID=stale bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+  echo 'FAIL: pane absent from live layout accepted' >&2; exit 1
+fi
+if HERDR_PANE_ID='' bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+  echo 'FAIL: missing pane id accepted' >&2; exit 1
+fi
 
 printf 'Do nothing and report.\n' >"$tmp/task.txt"
 (cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output")
