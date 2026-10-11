@@ -103,7 +103,11 @@ output_tokens="$(jq -er '(.result.agent.tokens.output_tokens // empty) |
   if type=="string" and test("^[0-9]+$") then tonumber
   elif type=="number" and . >= 0 then .
   else empty end' <<<"$agent_record" 2>/dev/null)" || output_tokens=null
-[[ "$agent_status" == idle ]] || die "agent is $agent_status, not idle; inspect pane"
+# Both seen (idle) and unseen (done) completions are ready for input in Herdr.
+case "$agent_status" in
+  idle|done) ;;
+  *) die "agent is $agent_status, not idle/done; inspect pane" ;;
+esac
 herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
 status=returned
 printf 'Agent returned; Pane %s retained for inspection (Root still must verify the work).\n' "$child_pane" >&2

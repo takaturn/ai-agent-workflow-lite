@@ -43,6 +43,7 @@ The runner checks the parent and new child pane, launches **one** agent, makes o
 - One writer per working tree. v0 has no parallel writers, infinite retry loops, automatic pane cleanup, or recursive agent spawning.
 - Before assigning a writer, follow the README's Worker branch/worktree procedure. Root prepares assignments serially with native Git, runs `scripts/check-worker-worktree.sh`, and compares worker ID, issue, branch and canonical absolute path against every active assignment. Give the child that exact cwd and restrict edits to it; never assign two writers to the same worktree. This is edit isolation, not an access-control sandbox. Do not force branch reuse or clean up another worker's worktree on failure. Herdr parallel launch remains outside v0.
 - On failure, do not re-send the same implementation blindly; retain the pane and summarize the failure.
+- After Root verifies and accepts successful work, close the child pane created for that task. First re-read its identity, cwd, and settled state; never close Root, another task's pane, or a working/blocked agent. Use `herdr pane close <verified-child-id>` and read the parent's layout back to confirm removal. Retain a successful pane only when the user asks; failure panes remain available for diagnosis.
 
 ## Child handoff
 

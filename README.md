@@ -12,7 +12,11 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
-**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。Herdr の実機 E2E はまだ未検証です。
+`bash tests/test-runner.sh` の成功はモックテストの成功であり、Herdr 実機での Worker 起動・監視・結果回収の成功を意味しません。
+
+**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。
+
+単独 Worker の実機検証は実施済みです。実測結果と検証範囲の正規記録は [Issue #3 の GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-3-Herdr-Single-Worker-E2E) を参照してください。2 Worker 並行実行と Claude Code の実機 E2E は未検証です。
 
 ## 使い方
 
