@@ -39,7 +39,7 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 
 ## 記録の配置
 
-- **[GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki):** 設計判断、実験結果、失敗から得た知見。初期ページの作成後はここを記録の入口とする。Wikiへの自動書き込み機能はv0にはありません。
+- **[設計原則（GitHub Wiki）](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Design%E2%80%90Principles):** 設計判断、実験結果、失敗から得た知見。初期ページの作成後はここを記録の入口とする。Wikiへの自動書き込み機能はv0にはありません。
 - **GitHub Issues:** 修正すべきバグや次の改善タスク。
 - **${XDG_STATE_HOME:-~/.local/state}/ai-agent-workflow-lite/**: 実行メタデータ（ユーザー専用権限）。プロンプト本文や大量ログを自動保存しない。
 - **${XDG_CACHE_HOME:-~/.cache}/ai-agent-workflow-lite/**: 今後必要になった場合のみ、一時データ。
