@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "codex": {
+      "light": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "standard": {
+        "model": "gpt-6-sol",
+        "effort": "medium"
+      },
+      "deep": {
+        "model": "gpt-6-sol",
+        "effort": "high"
+      }
+    },
+    "claude-only": {
+      "light": {
+        "model": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+      },
+      "standard": {
+        "model": "jp.anthropic.claude-sonnet-4-6"
+      },
+      "deep": {
+        "model": "global.anthropic.claude-opus-4-6-v1"
+      }
+    }
+  }
+}
