@@ -29,6 +29,40 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
 
+## Worker の branch / worktree 分離（Issue #4）
+
+原則は **1 Issue = 1 branch = 1 worktree = 1 PR**。Root が割当を直列に準備し、Worker ID・Issue・branch・絶対パスの対応をタスクに明記します。これは Git の編集分離であり、他のディレクトリへのアクセスを禁止する sandbox ではありません。
+
+新規割当の例（リポジトリ内から実行）:
+
+```bash
+git status --porcelain --untracked-files=all --ignored=matching
+git worktree list --porcelain
+git branch --list feature/issue4
+# 上記を確認し、汚れ・既存branch・既存割当があれば停止して調査する。
+# 存在する親ディレクトリの絶対パスを指定する。リポジトリ外を推奨。
+git worktree add -b feature/issue4 /absolute/worker-root/issue-4-worker-a HEAD
+bash scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
+```
+
+確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。命名は `feature/issue<N>` と `issue-<N>-<worker-id>`。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
+
+確認Shellは対象リポジトリ内（既存のlinked worktree内も可）から実行します。呼出元と割当先の実体common Git directoryが一致しなければ拒否します。HEADは実在するcommitへ解決できる必要があり、unborn branchは拒否します。無視対象の生成物・キャッシュも割当前の汚れとして検出し、削除せず停止します。
+
+Root は全割当の出力を比較し、Worker ID・Issue・branch・実体パスが既存の稼働中割当と重複しないことを確認します。このShell単体は稼働中Workerの台帳ではなく、同じ割当を2プロセスへ渡すことまでは検出しません。Gitのbranchチェックも同一worktree内の複数Writerを防ぎません。確認と起動を別のRootから同時に行わないでください。
+
+存在しないパス、worktreeルート以外、命名/branch不一致、detached HEAD、未追跡ファイルを含む汚れは拒否します。既存branchには `-b` が失敗し、別worktreeでcheckout済みのbranchはGitが拒否します。`-B` / `--force` / reset / 自動stashで回避しません。再開時は新規作成せず、Rootが既存割当と差分を確認してから判断します。作業開始後の汚れは正常なので、確認Shellは新規割当前のゲートとして使います。
+
+Workerへのタスクには「指定した絶対worktreeパスだけで編集する。他Workerのパスで操作しない。branch切替、worktree削除、共有Git設定変更、mergeをしない」を含めます。起動先のcwdも確認してください。現行 `run-agent.sh` の起動機構は変更しておらず、Herdrの並行起動は #5 の範囲です。
+
+```bash
+bash tests/test-worktree.sh
+```
+
+テストは一時Gitリポジトリで2つのworktreeを作成し、割当拒否・別ファイルの差分とbranch・worktree一覧・片方の失敗後に他方がcommitできることを確認します。テスト自身が作った一時領域だけを終了時に削除します。実運用の停止/失敗ではworktreeとbranchを残し、自動cleanupやmergeはしません。
+
+実環境での確認項目: 起動直前のcwd/branch/割当対応、両Workerの差分と `git worktree list --porcelain`、片方を停止した後の他方の継続、他方のファイルが混入しないこと。Herdr実Workerの並行・停止検証は未実施です。設計判断と測定結果はWikiへ、親Issue #2へは結果と残課題を共有します。
+
 ## 重要なルール
 
 1. 難易度とリスクを分離する。**`.agents/` の編集というだけで deep にしない**。auth・権限・sandbox境界・破壊的変更などは個別に判断する。

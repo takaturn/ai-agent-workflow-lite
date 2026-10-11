@@ -41,6 +41,7 @@ The runner checks the parent and new child pane, launches **one** agent, makes o
 - Stop at meaningful approval boundaries: destructive commands, major scope/spec changes, privilege escalation, blocked tools, access outside approved workspace, or PR merge.
 - Respect the user's Codex/Claude permissions and company policies. Never use another process or provider to circumvent a denial.
 - One writer per working tree. v0 has no parallel writers, infinite retry loops, automatic pane cleanup, or recursive agent spawning.
+- Before assigning a writer, follow the README's Worker branch/worktree procedure. Root prepares assignments serially with native Git, runs `scripts/check-worker-worktree.sh`, and compares worker ID, issue, branch and canonical absolute path against every active assignment. Give the child that exact cwd and restrict edits to it; never assign two writers to the same worktree. This is edit isolation, not an access-control sandbox. Do not force branch reuse or clean up another worker's worktree on failure. Herdr parallel launch remains outside v0.
 - On failure, do not re-send the same implementation blindly; retain the pane and summarize the failure.
 
 ## Child handoff
