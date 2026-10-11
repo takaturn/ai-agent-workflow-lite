@@ -12,7 +12,9 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
-**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。Herdr の実機 E2E はまだ未検証です。
+`bash tests/test-runner.sh` の成功はモックテストの成功であり、Herdr 実機での Worker 起動・監視・結果回収の成功を意味しません。
+
+**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。2026-10-11 の単発スモーク1回で、Herdr 0.9.3 / Codex CLI 0.162.1 による単独 Worker の起動・監視・結果回収・Root による成果検証を確認しました（Issue #3）。反復安定性、2 Worker 並行実行、Claude Code の実機 E2E は未検証です。
 
 ## 使い方
 
