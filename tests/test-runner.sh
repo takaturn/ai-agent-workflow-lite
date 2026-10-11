@@ -22,7 +22,7 @@ case "$1 $2" in
   'agent start'|'agent prompt')
     exit 0 ;;
   'agent get')
-    printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}' ;;
+    printf '%s\n' '{"result":{"agent":{"agent_status":"idle","tokens":{"input_tokens":"120","output_tokens":"30"}}}}' ;;
   'agent read')
     printf '%s\n' 'result: done' 'changed: none' 'checks: not-run' 'risks: none' 'next: none' ;;
   *)
@@ -49,7 +49,7 @@ printf 'Do nothing and report.\n' >"$tmp/task.txt"
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
-jq -e '.status == "returned" and .tier == "light" and .pane_id == "child"' "$summary" >/dev/null
+jq -e '.status == "returned" and .tier == "light" and .pane_id == "child" and .input_tokens == 120 and .output_tokens == 30' "$summary" >/dev/null
 [[ -z "$(git -C "$tmp/work" status --porcelain)" ]] || { echo 'FAIL: repo dirtied' >&2; exit 1; }
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
