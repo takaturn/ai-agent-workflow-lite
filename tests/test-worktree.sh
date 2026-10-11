@@ -11,10 +11,13 @@ one="$tmp/issue-4-worker-a"
 two="$tmp/issue-5-worker-b"
 git -C "$repo" worktree add -qb feature/issue4 "$one"
 git -C "$repo" worktree add -qb feature/issue5 "$two"
-check() { bash "$base/scripts/check-worker-worktree.sh" "$@"; }
+check() { (cd "$repo" && bash "$base/scripts/check-worker-worktree.sh" "$@"); }
 check worker-a 4 "$one" >"$tmp/assignment"
 test "$(cat "$tmp/assignment")" = "worker-a$(printf '\t')4$(printf '\t')feature/issue4$(printf '\t')$one"
 printf 'PASS: unique assignment\n'
+# A linked caller shares the common Git directory, even via a symlink.
+ln -s "$one" "$tmp/caller-alias"
+(cd "$tmp/caller-alias" && bash "$base/scripts/check-worker-worktree.sh" worker-b 5 "$two")
 reject() {
   if check "$@" >"$tmp/rejected" 2>&1; then
     printf 'FAIL: invalid assignment accepted\n' >&2; exit 1
@@ -28,6 +31,28 @@ mkdir "$one/issue-4-worker-a"
 reject worker-a 4 "$one/issue-4-worker-a"
 grep -Fx 'worktree check: path must be the worktree root' "$tmp/rejected"
 rmdir "$one/issue-4-worker-a"
+# A clean, correctly named worktree of another repository is out of scope.
+other="$tmp/other"
+mkdir "$other"
+git -C "$other" init -q
+git -C "$other" -c user.name=Test -c user.email=test@example.invalid commit -qm initial --allow-empty
+foreign="$tmp/foreign/issue-4-worker-a"
+git -C "$other" worktree add -qb feature/issue4 "$foreign"
+reject worker-a 4 "$foreign"
+grep -Fx 'worktree check: target belongs to a different repository' "$tmp/rejected"
+if (cd "$tmp" && bash "$base/scripts/check-worker-worktree.sh" worker-a 4 "$one") >"$tmp/rejected" 2>&1; then
+  printf 'FAIL: non-repository caller accepted\n' >&2; exit 1
+fi
+grep -Fx 'worktree check: caller is not a Git repository' "$tmp/rejected"
+# Use symbolic-ref for a portable unborn fixture (no worktree --orphan needed).
+unborn="$tmp/issue-8-worker-c"
+git -C "$repo" worktree add --detach -q "$unborn" HEAD
+git -C "$unborn" symbolic-ref HEAD refs/heads/feature/issue8
+if git -C "$unborn" rev-parse --verify 'HEAD^{commit}' >"$tmp/head" 2>&1; then
+  printf 'FAIL: unborn fixture has a commit\n' >&2; exit 1
+fi
+reject worker-c 8 "$unborn"
+grep -Fx 'worktree check: HEAD must resolve to a commit' "$tmp/rejected"
 # Git itself rejects duplicate branch assignment and existing branch creation.
 if git -C "$repo" worktree add "$tmp/duplicate" feature/issue4 >"$tmp/git-error" 2>&1; then
   printf 'FAIL: checked-out branch assigned twice\n' >&2; exit 1
@@ -35,6 +60,18 @@ fi
 if git -C "$repo" worktree add -b feature/issue4 "$tmp/conflict" >"$tmp/git-error" 2>&1; then
   printf 'FAIL: existing branch overwritten\n' >&2; exit 1
 fi
+check worker-b 5 "$two"
+# Ignored leftovers must not leak into a fresh worker assignment.
+printf 'cache/\n' >"$two/.gitignore"
+git -C "$two" add .gitignore
+git -C "$two" -c user.name=Test -c user.email=test@example.invalid commit -qm 'ignore cache'
+mkdir "$two/cache"
+printf 'stale\n' >"$two/cache/artifact"
+reject worker-b 5 "$two"
+grep -Fx 'worktree check: worktree is dirty; inspect without resetting' "$tmp/rejected"
+test "$(cat "$two/cache/artifact")" = stale
+rm "$two/cache/artifact"
+rmdir "$two/cache"
 check worker-b 5 "$two"
 printf 'one\n' >"$one/one.txt"
 reject worker-a 4 "$one"

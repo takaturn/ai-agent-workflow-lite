@@ -36,7 +36,7 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 新規割当の例（リポジトリ内から実行）:
 
 ```bash
-git status --porcelain --untracked-files=all
+git status --porcelain --untracked-files=all --ignored=matching
 git worktree list --porcelain
 git branch --list feature/issue4
 # 上記を確認し、汚れ・既存branch・既存割当があれば停止して調査する。
@@ -46,6 +46,8 @@ bash scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-w
 ```
 
 確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。命名は `feature/issue<N>` と `issue-<N>-<worker-id>`。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
+
+確認Shellは対象リポジトリ内（既存のlinked worktree内も可）から実行します。呼出元と割当先の実体common Git directoryが一致しなければ拒否します。HEADは実在するcommitへ解決できる必要があり、unborn branchは拒否します。無視対象の生成物・キャッシュも割当前の汚れとして検出し、削除せず停止します。
 
 Root は全割当の出力を比較し、Worker ID・Issue・branch・実体パスが既存の稼働中割当と重複しないことを確認します。このShell単体は稼働中Workerの台帳ではなく、同じ割当を2プロセスへ渡すことまでは検出しません。Gitのbranchチェックも同一worktree内の複数Writerを防ぎません。確認と起動を別のRootから同時に行わないでください。
 
