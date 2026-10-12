@@ -38,24 +38,43 @@ mkdir -p -- "$state_base"
 run_dir="$(mktemp -d "$state_base/run.XXXXXXXX")" || die 'cannot create run directory'
 
 agent_name="${role}-$(date +%s)-$$"
+run_id=${run_dir##*/}
+# Hash the loaded text used in the prompt, not a second read of a mutable file.
+task_sha256=$(printf '%s' "$task" | sha256sum)
+task_sha256=${task_sha256%% *}
 started="$(date +%s)"
-status=failed
+status=running
+phase=initialized
 child_pane=
 input_tokens=null
 output_tokens=null
-finish() {
-  rc=$?
+save_summary() {
+  local code=$1 elapsed
   elapsed=$(( $(date +%s) - started ))
   jq -n --arg role "$role" --arg profile "$profile" --arg tier "$tier" \
-    --arg model "$model" --arg pane "$child_pane" --arg status "$status" \
-    --argjson exit_code "$rc" --argjson duration_seconds "$elapsed" \
+    --arg model "$model" --arg pane "$child_pane" --arg agent_name "$agent_name" --arg status "$status" \
+    --arg run_id "$run_id" --arg parent "$parent_pane" --arg cwd "$root" \
+    --arg task_sha256 "$task_sha256" --arg phase "$phase" \
+    --argjson exit_code "$code" --argjson duration_seconds "$elapsed" \
     --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" \
-    '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,
+    '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,agent_name:$agent_name,
+      run_id:$run_id,parent_pane_id:$parent,worktree:$cwd,task_sha256:$task_sha256,
+      phase:$phase,root_acceptance:"pending",cleanup:"retained",close_attempted:false,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
-      input_tokens:$input_tokens,output_tokens:$output_tokens}' >"$run_dir/summary.json" || true
+      input_tokens:$input_tokens,output_tokens:$output_tokens}' >"$run_dir/.summary.tmp" || return 1
+  mv -- "$run_dir/.summary.tmp" "$run_dir/summary.json"
+}
+checkpoint() { save_summary null || die 'cannot record run checkpoint'; }
+finish() {
+  local rc=$?
+  [[ $rc == 0 ]] || status=failed
+  save_summary "$rc" || { printf 'run-agent: final summary write failed\n' >&2; exit 2; }
   printf 'Local summary: %s\n' "$run_dir/summary.json" >&2
 }
 trap finish EXIT
+checkpoint
+printf 'Run started: run_id=%s parent=%s agent=%s cwd=%s summary=%s\n' \
+  "$run_id" "$parent_pane" "$agent_name" "$root" "$run_dir/summary.json" >&2
 
 # Require Herdr's explicit return ID; never infer it from arbitrary layout differences.
 split="$(herdr pane split --current --direction right --cwd "$root" --no-focus)" || die 'child pane creation failed'
@@ -65,6 +84,9 @@ child_record="$(herdr pane get "$child_pane")" || die 'child pane inspection fai
 jq -e --arg id "$child_pane" --arg cwd "$root" \
   '.result.pane.pane_id == $id and .result.pane.cwd == $cwd' \
   >/dev/null <<<"$child_record" || die 'child pane identity/cwd mismatch'
+printf 'Agent target: name=%s pane=%s cwd=%s\n' "$agent_name" "$child_pane" "$root" >&2
+phase=pane_created
+checkpoint
 
 if [[ "$profile" == codex ]]; then
   sandbox=read-only
@@ -80,6 +102,8 @@ else
     --timeout 120000 -- --model "$model" --permission-mode "$permission_mode" \
     --safe-mode || die 'Claude start failed; inspect pane'
 fi
+phase=agent_ready
+checkpoint
 
 instructions="$task
 
@@ -89,6 +113,8 @@ changed: short file list or none
 checks: commands with pass/fail or not-run
 risks: remaining risks or none
 next: one next action or none"
+phase=prompt_wait
+checkpoint
 herdr agent prompt "$agent_name" "$instructions" --wait --timeout 600000 \
   >/dev/null || die 'prompt failed or timed out; inspect pane; no automatic retry'
 
@@ -109,5 +135,7 @@ case "$agent_status" in
   *) die "agent is $agent_status, not idle/done; inspect pane" ;;
 esac
 herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
+phase=result_collected
 status=returned
+checkpoint
 printf 'Agent returned; Pane %s retained for inspection (Root still must verify the work).\n' "$child_pane" >&2
