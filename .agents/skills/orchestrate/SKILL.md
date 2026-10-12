@@ -34,7 +34,15 @@ bash scripts/run-agent.sh implement codex light /path/to/task.txt
 bash scripts/run-agent.sh review codex standard /path/to/review-task.txt
 ```
 
-The runner checks the parent and new child pane, launches **one** agent, makes one bounded wait, and prints at most 120 recent lines. It keeps the pane for inspection. A successful CLI return means only that an agent returned, **not** that the task was completed correctly. Root verifies actual changes and focused tests.
+The runner publishes `run_id`, parent/agent identity, cwd and summary path before creating a Pane, then checkpoints the exact child ID before agent startup. The summary stores the SHA-256 of the once-loaded task text used in the prompt (shell trailing-newline normalization), never its contents; later file edits do not change that digest. It makes one bounded wait and reads at most 120 recent lines. `phase` records the last verified step (`initialized`, `pane_created`, `agent_ready`, `prompt_wait`, `result_collected`); `prompt_wait` means entering the wait call, not proof of delivery. `status` is `running`, `returned` or `failed`. A returned result leaves `root_acceptance=pending` and `cleanup=retained`: CLI success is not artifact acceptance. Failed runs retain their last phase and resources for diagnosis; never blindly resubmit.
+
+After Root independently verifies actual artifacts and focused checks (or accepts a Reader/Reviewer report as that task's artifact), finish the returned run:
+
+```bash
+bash scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root verified: short checks and outcome, no secrets'
+```
+
+This is an explicit Root attestation, not automatic content verification. The helper requires a finalized returned result, the same verified parent, matching child/name/cwd and idle/done state. It records acceptance and `close_attempted=true` before sending close, then reads the parent's layout back before recording `cleanup=closed`. An unverified close leaves acceptance recorded but cleanup retained; no automatic retry. On explicit re-execution, a prior accepted run with parent present/child absent can converge to closed without resending close or changing its original note. If an attempted close still shows the child, stop for manual diagnosis, even if the prior reply failed. Accepted/closed runs are idempotent only when layout still agrees. Invoke only with trusted summaries created by this task and under the single-Root coordination rule; do not reassign/move the child during finalization. Failed/blocked/unknown or identity-mismatched runs stop and remain available. This helper does not delete branches/worktrees or merge changes.
 
 For two independent deliverables, prepare and compare both assignments serially using the README procedure, including all already active assignments. Write one short task file per Worker with its exact cwd and allowed files. Then run from the owning repository:
 
@@ -66,7 +74,7 @@ The pair runner preflights both clean worktrees before launching, reuses `run-ag
 - Before assigning a writer, follow the README's Worker branch/worktree procedure. Root prepares assignments serially with native Git, runs `scripts/check-worker-worktree.sh`, and compares worker ID, issue, branch and canonical absolute path against every active assignment. Give the child that exact cwd and restrict edits to it; never assign two writers to the same worktree. This is edit isolation, not an access-control sandbox. Do not force branch reuse or clean up another worker's worktree on failure. A pair invocation does not detect assignments owned by another Root: do not launch competing Roots.
 - On failure, do not re-send the same implementation blindly; retain the pane and summarize the failure.
 - Startup blocked/timeout does not prove the process exited. Re-read the returned Pane ID; after the user resolves its trust/approval UI, only resume when it is idle/done and no original prompt was delivered. Never auto-answer trust prompts. `send-keys esc` can interrupt a Codex turn while its background shell command remains alive; verify the terminal separately and do not call this full process cancellation. Additional instructions after a settled turn are distinct from mid-turn steering.
-- After Root verifies and accepts successful work, close the child pane created for that task. First re-read its identity, cwd, and settled state; never close Root, another task's pane, or a working/blocked agent. Use `herdr pane close <verified-child-id>` and read the parent's layout back to confirm removal. Retain a successful pane only when the user asks; failure panes remain available for diagnosis.
+- After Root verifies successful work, use `finish-agent.sh` for finalized checkpointed returned runs to record acceptance and verified cleanup. For legacy summaries or explicit manual recovery, re-read identity/cwd/settled state, close only the verified task child and read back the parent's layout; never close Root, another task's pane, or a working/blocked agent. Retain a successful pane only when the user asks; failure panes remain available for diagnosis.
 
 ## Child handoff
 

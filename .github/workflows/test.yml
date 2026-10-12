@@ -16,5 +16,7 @@ jobs:
         run: bash tests/test-pair.sh
       - name: Controlled pair lifecycle orders (mock runners)
         run: python3 tests/test-pair-order.py
+      - name: Root acceptance and cleanup gates (mocked Herdr)
+        run: python3 tests/test-finish-agent.py
       - name: Bash syntax
         run: bash -n scripts/*.sh tests/*.sh

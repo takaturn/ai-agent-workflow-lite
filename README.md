@@ -9,6 +9,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `.agents/skills/orchestrate/SKILL.md`: Root が実装とレビューを必要に応じて委譲する
 - `scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
 - `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
+- `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
@@ -33,6 +34,20 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
+
+## 開始・結果回収・受入・片付け
+
+開始前に `run_id`・親Pane・agent名・cwd・summaryパスを出力し、Pane作成後は子IDも記録します。タスクは一度読み込んだ送信対象テキスト（Shellの末尾改行正規化後）のSHA-256で識別し、本文を保存しません。外部summaryの `phase` は最後に確認した段階（initialized / pane_created / agent_ready / prompt_wait / result_collected）、`status` はrunning / returned / failedです。prompt_waitは呼出し中であり、投入成功の証明ではありません。各checkpointは一時ファイルから置換しますが、強制終了後にプロセスがまだ生きているかは実Paneを再確認します。
+
+結果回収後も `root_acceptance=pending`・`cleanup=retained` のままです。Rootが成果・focused testsを独立確認してから、返されたsummaryと短い検証メモで明示的に受け入れます。
+
+```bash
+bash scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root検証: 成果とfocused testsを確認、秘密情報なし'
+```
+
+helperは同じ親Root・子Pane・agent名・cwd・idle/doneを照合し、受入記録→当該Paneのclose→親layout読戻しの順に処理します。これはRootの検証済みという申告を記録するもので、成果の正しさを自動判定しません。受入とclose結果は別管理で、close未確認ならacceptedでもretainedを残して停止します。close応答の消失も再送せずlayoutで確認し、closedはlayoutで裏付けられた場合だけ記録します。close後の記録失敗は、明示的な再実行で同じ受入Rootと元の検証メモを保持し、親が存在・子が不在ならcloseを再送せずclosedへ収束させます。受入済み・片付け済みの再実行はlayoutと一致する場合だけno-opです。
+
+close要求前に `close_attempted=true` を保存します。要求後も子が見える場合、応答失敗や反映遅延の可能性があるため再実行でもcloseを再送せず、Rootの手動確認で停止します。信頼できる当該タスクのsummaryだけを使い、処理中にPaneを移動・再割当しないでください。失敗・非完了・本人不一致は保持して停止し、自動retry・worktree削除・mergeは行いません。旧summaryや失敗からの手動回復は、既存の本人・状態照合とRoot判断が必要です。決定論的な検証は `python3 tests/test-finish-agent.py`（Herdr模擬）で、実機検証と区別します。
 
 ## Worker の branch / worktree 分離（Issue #4）
 
