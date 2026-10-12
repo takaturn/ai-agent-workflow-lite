@@ -47,10 +47,10 @@ finish() {
   rc=$?
   elapsed=$(( $(date +%s) - started ))
   jq -n --arg role "$role" --arg profile "$profile" --arg tier "$tier" \
-    --arg model "$model" --arg pane "$child_pane" --arg status "$status" \
+    --arg model "$model" --arg pane "$child_pane" --arg agent_name "$agent_name" --arg status "$status" \
     --argjson exit_code "$rc" --argjson duration_seconds "$elapsed" \
     --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" \
-    '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,
+    '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,agent_name:$agent_name,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
       input_tokens:$input_tokens,output_tokens:$output_tokens}' >"$run_dir/summary.json" || true
   printf 'Local summary: %s\n' "$run_dir/summary.json" >&2
@@ -65,6 +65,7 @@ child_record="$(herdr pane get "$child_pane")" || die 'child pane inspection fai
 jq -e --arg id "$child_pane" --arg cwd "$root" \
   '.result.pane.pane_id == $id and .result.pane.cwd == $cwd' \
   >/dev/null <<<"$child_record" || die 'child pane identity/cwd mismatch'
+printf 'Agent target: name=%s pane=%s cwd=%s\n' "$agent_name" "$child_pane" "$root" >&2
 
 if [[ "$profile" == codex ]]; then
   sandbox=read-only

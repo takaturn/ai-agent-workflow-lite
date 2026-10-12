@@ -24,6 +24,7 @@ for ((n=0;n<100;n++)); do
   sleep .02
 done
 [[ -e "$TEST_DIR/a.started" && -e "$TEST_DIR/b.started" ]] || exit 90
+if [[ ${DELAY_B:-0} == 1 && $id == b ]]; then sleep .3; fi
 printf 'result-%s\n' "$id"
 printf 'summary-%s\n' "$id" >&2
 [[ ${FAIL_A:-0} != 1 || $id != a ]] || exit 17
@@ -45,4 +46,38 @@ rm "$tmp/a.started" "$tmp/b.started"
 if bash "$tmp/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" a 52 "$tmp/b" light "$tmp/task" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
 grep -q 'duplicate assignment' "$tmp/err"
 [[ ! -e "$tmp/a.started" && ! -e "$tmp/b.started" ]]
-printf 'PASS: concurrent launch, attributed output, peer failure isolation, duplicate refusal\n'
+# Fault injection: runner succeeds but attribution output fails.
+rm -f "$tmp/a.finished" "$tmp/b.finished"
+printf() {
+  if [[ $1 == '[%s issue=%s] %s\n' && ${OUTPUT_FAILED_ONCE:-0} == 0 ]]; then
+    OUTPUT_FAILED_ONCE=1
+    return 67
+  fi
+  builtin printf "$@"
+}
+export -f printf
+if run >"$tmp/output-failure" 2>"$tmp/output-error"; then
+  builtin printf 'FAIL: attribution output failure accepted\n' >&2
+  exit 1
+fi
+unset -f printf
+grep -q 'output_exit=67' "$tmp/output-error"
+[[ -f "$tmp/a.finished" && -f "$tmp/b.finished" ]]
+# A failed final status line must not skip waiting for a still-running peer.
+rm -f "$tmp/a.started" "$tmp/b.started" "$tmp/a.finished" "$tmp/b.finished"
+printf() {
+  if [[ $1 == 'worker=%s issue=%s runner_exit=%s\n' ]]; then return 68; fi
+  builtin printf "$@"
+}
+export -f printf
+status_rc=0
+DELAY_B=1 run >"$tmp/status-failure" 2>"$tmp/status-error" || status_rc=$?
+unset -f printf
+if [[ ! -f "$tmp/b.finished" ]]; then
+  # Give this fixture's orphaned mock time to finish before its directory is removed.
+  sleep .4
+  printf 'FAIL: status output failure skipped peer wait\n' >&2
+  exit 1
+fi
+[[ $status_rc != 0 && -f "$tmp/a.finished" ]]
+printf 'PASS: concurrent launch, attributed output, peer failure isolation, duplicate refusal, output failure drain/wait\n'

@@ -19,8 +19,10 @@ case "$1 $2" in
     ;;
   'pane split')
     printf '%s\n' '{"result":{"pane":{"pane_id":"child"}}}' ;;
-  'agent start'|'agent prompt')
-    exit 0 ;;
+  'agent start')
+    exit "${TEST_START_EXIT:-0}" ;;
+  'agent prompt')
+    exit "${TEST_PROMPT_EXIT:-0}" ;;
   'agent get')
     jq -n --arg status "${TEST_AGENT_STATUS:-idle}" \
       '{result:{agent:{agent_status:$status,tokens:{input_tokens:"120",output_tokens:"30"}}}}' ;;
@@ -46,11 +48,14 @@ if HERDR_PANE_ID='' bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
 fi
 
 printf 'Do nothing and report.\n' >"$tmp/task.txt"
-(cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output")
+(cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
 jq -e '.status == "returned" and .tier == "light" and .pane_id == "child" and .input_tokens == 120 and .output_tokens == 30' "$summary" >/dev/null
+jq -e '.agent_name | test("^implement-[0-9]+-[0-9]+$")' "$summary" >/dev/null
+name=$(jq -r '.agent_name' "$summary")
+grep -Fq "Agent target: name=$name pane=child" "$tmp/error"
 [[ -z "$(git -C "$tmp/work" status --porcelain)" ]] || { echo 'FAIL: repo dirtied' >&2; exit 1; }
 
 # Herdr reports an unseen completion as done, which is also ready for input.
@@ -67,6 +72,30 @@ for agent_status in working blocked unknown; do
   fi
   grep -q "agent is $agent_status" "$tmp/refused-error"
   [[ ! -s "$tmp/refused-output" ]] || { echo 'FAIL: non-ready result read' >&2; exit 1; }
+done
+
+# Identity survives failures before result collection; diagnostics and summary agree.
+for failure in start prompt; do
+  start_exit=0; prompt_exit=0
+  if [[ $failure == start ]]; then start_exit=34; else prompt_exit=35; fi
+  if (cd "$tmp/work" && TEST_START_EXIT=$start_exit TEST_PROMPT_EXIT=$prompt_exit \
+    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    >"$tmp/failed-output" 2>"$tmp/failed-error"); then
+    echo "FAIL: $failure failure accepted" >&2; exit 1
+  fi
+  summary_path=
+  while IFS= read -r line; do
+    [[ $line != 'Local summary: '* ]] || summary_path=${line#Local summary: }
+  done <"$tmp/failed-error"
+  [[ -n $summary_path && ! -s "$tmp/failed-output" ]]
+  jq -e '.status == "failed" and .exit_code == 2 and .pane_id == "child" and (.agent_name | test("^implement-[0-9]+-[0-9]+$"))' "$summary_path" >/dev/null
+  name=$(jq -r '.agent_name' "$summary_path")
+  grep -Fq "Agent target: name=$name pane=child" "$tmp/failed-error"
+  if [[ $failure == start ]]; then
+    grep -q 'Codex start failed' "$tmp/failed-error"
+  else
+    grep -q 'prompt failed or timed out' "$tmp/failed-error"
+  fi
 done
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
