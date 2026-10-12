@@ -90,8 +90,10 @@ bash tests/test-worktree.sh
 1. 難易度とリスクを分離する。**`.agents/` の編集というだけで deep にしない**。auth・権限・sandbox境界・破壊的変更などは個別に判断する。
 2. 権限内での通常の修正、lint/test、指摘の修正は継続する。許可されていない破壊的変更・権限昇格・仕様変更・PR merge は勝手に実行しない。
 3. Herdr の存在を環境変数だけでは判定しない。実際の pane と layout を検証し、確認できなければ**明示的に停止**する。無断の代替ランタイム起動はしない。
-4. 最大2 Writer、1 worktreeに1 Writer。自動リトライ・再帰委譲は非対応。失敗時に原因が確認できるよう Pane は残す。
+4. 最大2 Writer、1 worktreeに1 Writer。ReaderとReviewerは合計最大1体を初期上限とし、子エージェント全体は最大3体（Rootを除く）。これはRootの割当規約であり、runnerの自動上限制御ではない。ReaderはWriter枠には数えないが、無制限には増やさない。自動リトライ・再帰委譲は非対応。失敗時に原因が確認できるよう Pane は残す。
 5. 出力を大量に再読しない。サブエージェントは最後に短い作業結果を返す。
+6. 役割と権限を分ける。**Writer**は承認済み範囲を専用worktreeで編集する。**Reader**はコード読解・依存/仕様調査・原因候補の整理を行い、**Reviewer**は変更の妥当性・リスクを独立評価する。Reader/Reviewerは初回・追加指示とも編集・commit/push・外部状態変更・子起動は禁止で、指摘を得てもWriterへ自動昇格しない。修正とファイル生成が必要なテストはRoot/Writerが担当する。Codexはread-only指定、Claudeのplan/safe-modeは同等の隔離保証ではないため、実効制限を確認できない環境ではClaude Reader/Reviewerを起動しない。読取コマンドの暗黙cache生成も確認対象とし、拒否を権限変更で回避しない。
+7. Readerは独立した調査がRootの負担を減らす場合だけ起動する。軽微な検索・決定論的チェックはRootが直接行う。専用Herdr Paneを与えるが、変更しないため別worktreeは必須ではない。固定commitの根拠はSHAとpath:line、変更中のツリーの根拠はlive表記・観測時刻・内容hashで分け、未コミット行をSHAの内容として報告しない。確認済み事実・仮説・未確認を分け、Rootが採用前に根拠を再照合する。起動直前・再開時には既存Pane/agentと全タスク割当を照合し、残存Reader/Reviewerも枠に数える。所有者・役割・全割当を確認できなければ新規起動を止める。並行する複数Rootによる無調整起動は非対応。具体的手順は [orchestrate Skill](.agents/skills/orchestrate/SKILL.md) を参照する。
 
 ## 記録の配置
 
