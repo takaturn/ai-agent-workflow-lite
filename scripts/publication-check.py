@@ -44,7 +44,9 @@ def snapshot(args):
             '--no-ext-diff', '--no-textconv', '--format=fuller', '--binary', '-p',
             '--diff-merges=first-parent', '--no-renames', resolved_range, '--'],
             stderr=subprocess.PIPE)
-        if b'GIT binary patch\n' in data or b'Binary files ' in data:
+        if any(line == b'GIT binary patch' or
+               (line.startswith(b'Binary files ') and line.endswith(b' differ'))
+               for line in data.splitlines()):
             raise ValueError('binary Git patch unsupported; publication blocked')
         if not data:
             raise ValueError('empty Git range')

@@ -145,6 +145,15 @@ class PublicationTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(self.marker.exists())
 
+    def test_binary_marker_in_text_diff_is_not_a_binary_patch(self):
+        git, base = self.git_fixture()
+        self.body.write_text('literal Binary files example differ\n')
+        git('add', 'body.txt'); git('commit', '-qm', 'ordinary text')
+        with tempfile.TemporaryDirectory() as state:
+            self.env['XDG_STATE_HOME'] = state
+            result = self.invoke('prepare', '--context-reviewed', '--git-range', base+'..HEAD')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_missing_scanner_blocks(self):
         (self.bin/'gitleaks').unlink()
         (self.bin/'git').symlink_to(shutil.which('git'))
