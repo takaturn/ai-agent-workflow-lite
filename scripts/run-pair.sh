@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 die() { printf 'run-pair: %s\n' "$*" >&2; exit 2; }
 [[ $# == 11 ]] || die 'usage: <profile> <worker-a> <issue-a> <worktree-a> <tier-a> <task-a> <worker-b> <issue-b> <worktree-b> <tier-b> <task-b>'
+[[ ${LAUNCH_TASK_ID:-} =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ ]] || die 'LAUNCH_TASK_ID must be an explicit stable task ID'
 profile=$1; shift
 case "$profile" in codex|claude-only) ;; *) die 'invalid profile' ;; esac
 base=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)

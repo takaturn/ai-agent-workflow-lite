@@ -26,12 +26,17 @@ case "$1 $2" in
     ;;
   'pane split')
     inspect_phase initialized
+    ledgers=("$XDG_STATE_HOME"/ai-agent-workflow-lite/launch-gate/*/state.json)
+    [[ ${#ledgers[@]} == 1 && -f ${ledgers[0]} ]]
+    jq -e '.reservations[-1].status=="reserved"' "${ledgers[0]}" >/dev/null
+    [[ ${TEST_SPLIT_EXIT:-0} == 0 ]] || exit "$TEST_SPLIT_EXIT"
     printf '%s\n' '{"result":{"pane":{"pane_id":"child"}}}' ;;
   'agent start')
     inspect_phase pane_created
     exit "${TEST_START_EXIT:-0}" ;;
   'agent prompt')
     inspect_phase prompt_wait
+    if [[ ${TEST_PROMPT_SIGNAL:-0} == 1 ]]; then kill -TERM "$PPID"; exit 143; fi
     [[ -z ${TEST_CAPTURE_PROMPT:-} ]] || printf '%s' "$4" >"$TEST_CAPTURE_PROMPT"
     exit "${TEST_PROMPT_EXIT:-0}" ;;
   'agent get')
@@ -47,6 +52,20 @@ MOCK
 chmod +x "$tmp/bin/herdr"
 export PATH="$tmp/bin:$PATH" TEST_ROOT="$tmp/work" XDG_STATE_HOME="$tmp/state"
 export HERDR_ENV=1 HERDR_PANE_ID=parent
+export LAUNCH_TASK_ID=runner-fixture
+# These are fixture attestations only; no production approval is inferred.
+fixture_policy() {
+  XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+    --worktree "$tmp/work" \
+    approve --approval-ref fixture-only --provider codex --model gpt-6-luna \
+    --additional-launches 100 --paths run-agent >/dev/null
+}
+for state_dir in "$tmp/state" "$tmp/lifecycle" "$tmp/mutated" \
+  "$tmp/checkpoint-initialized" "$tmp/checkpoint-pane_created" \
+  "$tmp/checkpoint-agent_ready" "$tmp/checkpoint-prompt_wait" \
+  "$tmp/checkpoint-result_collected"; do
+  fixture_policy "$state_dir"
+done
 
 test "$(bash "$base/scripts/herdr-context.sh")" = parent
 if HERDR_ENV=0 bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
@@ -60,6 +79,21 @@ if HERDR_PANE_ID='' bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
 fi
 
 printf 'Do nothing and report.\n' >"$tmp/task.txt"
+# Caller-controlled labels cannot select a different reservation route.
+if (cd "$tmp/work" && LAUNCH_PATH=run-pair bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/path-output" 2>"$tmp/path-error"); then
+  echo 'FAIL: caller-selected route accepted' >&2; exit 1
+fi
+grep -q 'LAUNCH_PATH is unsupported' "$tmp/path-error"
+
+# Missing approval policy must stop before a child pane is created.
+if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/no-policy" TEST_ACTIONS="$tmp/no-policy-actions" \
+  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/no-policy-error"); then
+  echo 'FAIL: missing launch policy accepted' >&2; exit 1
+fi
+grep -q 'launch reservation denied' "$tmp/no-policy-error"
+if grep -Eq '^(pane split|agent start)$' "$tmp/no-policy-actions"; then
+  echo 'FAIL: missing policy launched a child' >&2; exit 1
+fi
 (cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
@@ -67,6 +101,10 @@ summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 jq -e '.status == "returned" and .tier == "light" and .pane_id == "child" and .input_tokens == 120 and .output_tokens == 30' "$summary" >/dev/null
 jq -e '.agent_name | test("^implement-[0-9]+-[0-9]+$")' "$summary" >/dev/null
 jq -e '.phase == "result_collected" and .root_acceptance == "pending" and .cleanup == "retained" and .parent_pane_id == "parent" and (.run_id | startswith("run.")) and (.task_sha256 | test("^[a-f0-9]{64}$"))' "$summary" >/dev/null
+jq -e '.task_id == "runner-fixture" and (.reservation_id | length > 0)' "$summary" >/dev/null
+ledger="$tmp/state/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json"
+reservation=$(jq -r '.reservation_id' "$summary")
+jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="returned"' "$ledger" >/dev/null
 name=$(jq -r '.agent_name' "$summary")
 grep -Fq "Agent target: name=$name pane=child" "$tmp/error"
 [[ -z "$(git -C "$tmp/work" status --porcelain)" ]] || { echo 'FAIL: repo dirtied' >&2; exit 1; }
@@ -153,6 +191,8 @@ for failure in start prompt; do
   jq -e '.status == "failed" and .exit_code == 2 and .pane_id == "child" and (.agent_name | test("^implement-[0-9]+-[0-9]+$"))' "$summary_path" >/dev/null
   if [[ $failure == start ]]; then phase=pane_created; else phase=prompt_wait; fi
   jq -e --arg phase "$phase" '.phase==$phase and .root_acceptance=="pending" and .cleanup=="retained"' "$summary_path" >/dev/null
+  reservation=$(jq -r '.reservation_id' "$summary_path")
+  jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="failed"' "$ledger" >/dev/null
   name=$(jq -r '.agent_name' "$summary_path")
   grep -Fq "Agent target: name=$name pane=child" "$tmp/failed-error"
   if [[ $failure == start ]]; then
@@ -161,6 +201,34 @@ for failure in start prompt; do
     grep -q 'prompt failed or timed out' "$tmp/failed-error"
   fi
 done
+
+# A failed pane split is prelaunch_error; the consumed reservation remains.
+if (cd "$tmp/work" && TEST_SPLIT_EXIT=42 \
+  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  >"$tmp/prelaunch-output" 2>"$tmp/prelaunch-error"); then
+  echo 'FAIL: pane split failure accepted' >&2; exit 1
+fi
+summary_path=
+while IFS= read -r line; do
+  [[ $line != 'Local summary: '* ]] || summary_path=${line#Local summary: }
+done <"$tmp/prelaunch-error"
+jq -e '.status=="prelaunch_error" and .phase=="initialized"' "$summary_path" >/dev/null
+reservation=$(jq -r '.reservation_id' "$summary_path")
+jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="prelaunch_error"' "$ledger" >/dev/null
+
+# TERM during prompt is recorded as interrupted, without refund.
+if (cd "$tmp/work" && TEST_PROMPT_SIGNAL=1 \
+  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  >"$tmp/interrupted-output" 2>"$tmp/interrupted-error"); then
+  echo 'FAIL: interrupted prompt accepted' >&2; exit 1
+fi
+summary_path=
+while IFS= read -r line; do
+  [[ $line != 'Local summary: '* ]] || summary_path=${line#Local summary: }
+done <"$tmp/interrupted-error"
+jq -e '.status=="interrupted" and .phase=="prompt_wait"' "$summary_path" >/dev/null
+reservation=$(jq -r '.reservation_id' "$summary_path")
+jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="interrupted"' "$ledger" >/dev/null
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \

@@ -11,6 +11,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
 - `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
+- `scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
@@ -30,14 +31,36 @@ bash tests/test-runner.sh
 
 # デモ用タスクファイル。秘密情報は書かない。
 printf '%s\n' 'READMEの誤字を一箇所だけ修正し、差分を確認して報告する。' > /tmp/ai-work-demo.txt
+export LAUNCH_TASK_ID=issue-51-demo # 同じタスクの全worktree・再開で固定
+# 以下はユーザーの明示承認が既にある場合だけ実行する。
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
+  --approval-ref '<承認記録の参照>' --provider codex --model gpt-6-luna \
+  --additional-launches 1 --paths run-agent
 bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
 
+## タスク単位の起動ゲート（Issue #16）
+
+`LAUNCH_TASK_ID` は明示必須です。run名、Pane、worktree、再開に依存しない同じIDを同じ承認済みタスクの全実行で使ってください。別タスクとは重複しないIDにします。`XDG_STATE_HOME` も全worktreeで共通のGit管理外ディレクトリに固定します。policyと予約は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-gate/<task-id>/state.json` に保存され、ユーザー専用のlockで排他的に更新されます。単位は **予約された子CLI起動枠1回** です。Pane作成の前に枠を予約するため、Pane作成失敗も枠を消費します。
+
+`approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
+
+```bash
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
+# ユーザーが停止を明示したとき:
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
+python3 tests/test-launch-gate.py
+```
+
+各予約は `reserved` から `returned` / `failed` / `interrupted` / `prelaunch_error` に更新されます。強制終了などで `reserved` のままでも消費済みとして数え、自動返却や自動retryはしません。上限到達と明示停止は `stop.reason=limit_reached|explicit_stop` として残し、#15が参照できます。追加承認は上限到達だけを解除し、明示停止を解除しません。この停止状態は新規起動の拒否であり、稼働中の子を停止した証拠ではありません。子の所有者、実効停止能力、停止結果は別途確認してください。`LAUNCH_PATH` による経路の自己申告は受け付けません。使用量と単価は `unknown` のままであり、請求確定額や絶対的な課金上限を保証しません。
+
+対象はこの `run-agent.sh` のCodex/Claude起動と、これを使う `run-pair.sh` です。後者では両worktreeで同じ `LAUNCH_TASK_ID` と `XDG_STATE_HOME` を渡し、policyに共通の `run-agent` 経路を許可してください。直接の `codex` / `claude` / `herdr agent start`、他のrunner、Root自身の推論、稼働中エージェントへの追加promptはこのゲートを通りません。policy/stateの手動編集や異なるstate homeの利用も防げないため、Rootが実際の割当とIDを照合します。モデルなしテストは予約動作の確認であり、実機AI起動や請求の検証ではありません。
+
 ## 開始・結果回収・受入・片付け
 
-開始前に `run_id`・親Pane・agent名・cwd・summaryパスを出力し、Pane作成後は子IDも記録します。タスクは一度読み込んだ送信対象テキスト（Shellの末尾改行正規化後）のSHA-256で識別し、本文を保存しません。外部summaryの `phase` は最後に確認した段階（initialized / pane_created / agent_ready / prompt_wait / result_collected）、`status` はrunning / returned / failedです。prompt_waitは呼出し中であり、投入成功の証明ではありません。各checkpointは一時ファイルから置換しますが、強制終了後にプロセスがまだ生きているかは実Paneを再確認します。
+開始前に `run_id`・親Pane・agent名・cwd・summaryパスを出力し、Pane作成後は子IDも記録します。タスクは一度読み込んだ送信対象テキスト（Shellの末尾改行正規化後）のSHA-256で識別し、本文を保存しません。外部summaryの `phase` は最後に確認した段階（initialized / pane_created / agent_ready / prompt_wait / result_collected）、`status` はrunning / returned / failed / interrupted / prelaunch_errorです。prompt_waitは呼出し中であり、投入成功の証明ではありません。各checkpointは一時ファイルから置換しますが、強制終了後にプロセスがまだ生きているかは実Paneを再確認します。
 
 結果回収後も `root_acceptance=pending`・`cleanup=retained` のままです。Rootが成果・focused testsを独立確認してから、返されたsummaryと短い検証メモで明示的に受け入れます。
 
@@ -82,7 +105,7 @@ RootはAGENTS.mdからorchestrate Skillを自動適用し、独立した複数�
 Rootが上記手順で2割当を直列準備し、既存稼働割当との重複も照合した後:
 
 ```bash
-bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
+LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
 bash tests/test-pair.sh
 ```
 

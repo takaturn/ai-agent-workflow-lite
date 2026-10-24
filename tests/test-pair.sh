@@ -30,7 +30,7 @@ printf 'summary-%s\n' "$id" >&2
 [[ ${FAIL_A:-0} != 1 || $id != a ]] || exit 17
 touch "$TEST_DIR/$id.finished"
 SH
-export TEST_DIR="$tmp"
+export TEST_DIR="$tmp" LAUNCH_TASK_ID=pair-fixture
 run() { bash "$tmp/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 52 "$tmp/b" light "$tmp/task"; }
 run >"$tmp/out" 2>"$tmp/err"
 [[ -f "$tmp/a.finished" && -f "$tmp/b.finished" ]]
