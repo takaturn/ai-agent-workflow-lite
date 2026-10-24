@@ -16,6 +16,8 @@
 
 ## 外部公開前の秘匿情報確認
 
+- 新規cloneを送信元として使う前、およびGit push前に `scripts/install-gitleaks-hook.py` の成功（導入済みなら実体一致の検証）を確認する。Git pushは同installerで導入するnative `pre-push` を有効にした状態で行う。Gitが渡す全送信ref/OIDを自動検査し、失敗なら送信前に停止する。`--no-verify`、hook削除、`core.hooksPath`変更などで検査を迂回しない。既存hook/configがあれば上書きせず停止する。hookは共通Git directoryへコピーされ、同じrepositoryのlinked worktreeに適用される。
+
 - push、PR作成/本文更新、Issue本文更新/コメント投稿などの外部書込みの前に、Rootが公開対象の全commit（途中で削除された内容・commit messageも含む）、投稿本文、添付物、実行コマンドを確認する。LLMの入力・出力・テスト結果も公開前確認の対象。既存の公開承認を秘匿情報確認の代わりにしない。
 - 認証情報は `scripts/publication-check.py` のGitleaks検査を通す。個人情報、顧客/社内情報、内部URL/パス、会話・プロンプト・ログの引用、公開不要な識別子はRootが文脈を確認し、必要最小限に削除/匿名化する。自動検出0件だけで秘匿情報なしと断定しない。
 - 対象を確定して文脈確認後、`prepare --context-reviewed` で検査記録を作り、同一入力・同一コマンドを `publish` で実行する。未検査、検出あり、scanner不在/異常、対象変更、既使用の記録は公開停止。候補値・scanner生出力は表示・保存しない。検査記録はGit管理外に保存する。

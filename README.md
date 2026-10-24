@@ -149,6 +149,23 @@ bash tests/test-worktree.sh
 新しい仕組みを増やす前に、ユーザーにとっての改善を測定します。
 
 
+## Gitの送信前hook
+
+Git公式の [pre-push仕様](https://git-scm.com/docs/githooks#_pre_push) に従い、通常の `git push` から自動実行するhookを導入します。Gitが渡す送信ref/OIDを使うため、Rootが範囲を手入力する必要はありません。Git公式はhook仕様を定め、秘密検出には別途Gitleaksを使用しています。
+
+```bash
+python3 scripts/install-gitleaks-hook.py
+python3 tests/test-gitleaks-hook.py
+```
+
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkなどの場合は上書きしません。同じコピーなら再実行はno-opです。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+
+新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。refの削除は新しい内容を送らないため検査対象外です。
+
+Gitleaksは組み込みルールを明示して使用し、repo/env設定やignoreコメントでの抑制を受け付けません。scanner不在・検出・異常・timeoutはpush失敗とし、候補値・生の診断出力・認証情報を含む可能性のあるremote URLは表示しません。テストは使い捨てのローカルbare repositoryで実際のpushを行い、拒否時に受信refが変わらないことを確認します。実Gitleaksによる検証とは区別します。
+
+これはローカルhookです。`--no-verify` や設定変更による無効化はGitの機能として可能であり、サーバー側の強制ではありません。CIだけでは公開前の防止になりません。PR/Issue本文・コメントはGitを通らないため、次節の公開前ゲートとRootの文脈確認が引き続き必要です。自動検出0件で機密情報全般の不在は保証しません。
+
 ## 外部公開前チェック
 
 `publication-check.py` は外部書込み前の協調的な運用ゲートです。Gitleaksが必要です。Rootは自動検査に先立ち、個人情報・顧客/社内情報・内部URL/パス・LLM会話やログの引用などを文脈確認します。`--context-reviewed` はその申告であり、内容の安全性を自動証明しません。
