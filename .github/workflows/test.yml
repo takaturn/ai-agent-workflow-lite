@@ -8,6 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Publication gate (model-free scanner/dispatch fixtures)
+        run: python3 tests/test-publication-check.py
       - name: Task launch reservations (model-free)
         run: python3 tests/test-launch-gate.py
       - name: Mocked Herdr integration

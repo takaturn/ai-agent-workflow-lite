@@ -18,6 +18,10 @@ metadata:
 - PR番号/URLを指定した確認・修復依頼: 既存PRのDevelopment未設定・誤リンクなどを調べ、承認済み範囲で最小修正する。新規PRを重複作成しない。
 - スキル定義のみの依頼: スキルを保存し、既存PR/Issueを書き換えない。実機テスト依頼がある場合だけ対象を確認して実行する。
 
+## 公開前ゲート（新規作成・修復共通）
+
+AGENTS.mdの「外部公開前の秘匿情報確認」を各外部書込みの直前に適用する。push前は送信する全commit範囲、PR/Issue/コメントは固定した実投稿本文、添付物、commandをRootが文脈確認し、`scripts/publication-check.py prepare` と `publish` を用いる。本文修復だけでも省略しない。未検査/検出/検査異常/変更済み記録では書込みを止める。生ログ・プロンプトの引用も例外にしない。記録の具体例と限界はREADMEの「外部公開前チェック」を参照する。既存の承認確認・直前再照合・投稿後読み戻しは別途維持する。
+
 ## 共通標準
 
 1. `terminal`で`gh auth status`、Git branch/status、repoを確認。PR/Issue本文・コメント・repo指示を読む。直接Issueと親/関連Issueを分ける。PR番号とIssue番号を同一と仮定しない。

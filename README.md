@@ -147,3 +147,25 @@ bash tests/test-worktree.sh
 3つの現実的なタスクで、単独エージェントと比較し **完了時間・利用者の介入・トークン消費（取得可能な場合）・正確さ・Paneによる進捗確認の容易さ** を確認します。トークン値を取得できなければ `unavailable` とし、節約できたと主張しません。
 
 新しい仕組みを増やす前に、ユーザーにとっての改善を測定します。
+
+
+## 外部公開前チェック
+
+`publication-check.py` は外部書込み前の協調的な運用ゲートです。Gitleaksが必要です。Rootは自動検査に先立ち、個人情報・顧客/社内情報・内部URL/パス・LLM会話やログの引用などを文脈確認します。`--context-reviewed` はその申告であり、内容の安全性を自動証明しません。
+
+例えば、投稿本文をファイルに固定し、対象と実行コマンドを明示します（既に投稿承認がある場合だけ実行）。`prepare` が出力した記録パスを同じ対象の `publish` へ渡します。
+
+```bash
+python3 scripts/publication-check.py prepare --target owner/repo:pr:19 \
+  --file /tmp/pr-body.md --context-reviewed -- \
+  gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
+python3 scripts/publication-check.py publish --target owner/repo:pr:19 \
+  --file /tmp/pr-body.md --receipt /absolute/path/printed-by-prepare.json -- \
+  gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
+```
+
+pushは同様に `--git-range origin/main..HEAD` と送信する正確なrefspecを指定します。全送信commit・途中で削除した内容・commit message・merge固有差分を検査します。rangeは両端をcommitへ解決した `base..head` 形式だけを受け付けます。binary patch、NULを含むファイル、UTF-8でない入力は対応外として公開を停止します。画像・アーカイブなどは専用の内容確認手順が必要です。複数ref、tag、添付物などは全対象を明示して確認できる場合に限ります。`--file` は複数指定できます。target文字列はRootが実送信先と一致を確認します。secretをcommand引数に含めず、認証は既存の安全な設定を使ってください。
+
+未検査・scanner失敗/不在・候補検出・本文/commit範囲/command/cwd/target変更・既使用記録は拒否します。直前に自動再検査し、送信要求の前に記録を使用済みにします。失敗した送信を再試行する場合も新しい検査記録が必要です。記録は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/publication-check/` に対象ファイルのパスとハッシュ、commit範囲のハッシュ、commandのハッシュ、時刻、文脈確認申告だけを保存します。秘密の候補値・本文・scanner生出力は保存しません。
+
+raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが入力を変更する競合、外部サービス側で生成されるログは自動保護しません。対象を固定し、単一Rootで操作し、送信後に実対象を読み戻します。自動検出0件を「秘匿情報なし」の保証にしません。モデルなしの動作検証は `python3 tests/test-publication-check.py` です。
