@@ -164,7 +164,7 @@ python3 scripts/install-gitleaks-hook.py
 python3 tests/test-gitleaks-hook.py
 ```
 
-installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkなどの場合は上書きしません。同じコピーなら再実行はno-opです。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。保護対象のhookを人の端末でcommit・再承認した後、既存hookが以前の承認済みcommit内のソースと完全一致するときだけ `python3 scripts/install-gitleaks-hook.py --upgrade-approved` で更新できます。更新時は協調的な排他lockと置換直前の再照合を行い、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。承認前・未知のhook・symlink・`core.hooksPath` 設定は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
 
 新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
 
@@ -198,17 +198,19 @@ raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが�
 
 ユーザーと合意した今回の到達点は、repo管理・AGENTS.mdの禁止ルール・hookによる誤操作防止です。同じ主体による意図的な無効化、未導入clone、raw API投稿などを技術的に排除する保証はありません。この残存リスクを受容した範囲で受入を判断し、Root全面隔離や迂回不能を達成したとは扱いません。post-push CIを公開前防止の代わりにしません。
 
-`config/publication-policy.json` は保護対象を列挙します。ユーザー承認済みの正確なcommitを記録してからnative hookを導入します。
+`config/publication-policy.json` は保護対象を列挙します。新規cloneでは、送信先のbaseブランチと一致する保護対象だけを `bootstrap` が確認し、再作成可能なローカル状態とguardのコピーを作ります。installerは状態がないときにこの処理を呼びます。feature側で保護対象を変更した場合は、文脈確認とユーザー承認後に正確なcommitを別途承認します。
 
 ```sh
-python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
 python3 scripts/install-gitleaks-hook.py
+# 以下は保護対象を変更し、人の端末でcommitした場合だけ実行する
+python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
+python3 scripts/install-gitleaks-hook.py --upgrade-approved
 python3 tests/test-policy-guard.py
 ```
 
-`approve` は明示承認の申告で、認証ではありません。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。承認記録とguardのコピーはcommon Git directoryでlinked worktree間に共有します。installerは承認を発行しません。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
+`approve` は明示承認の申告で、認証ではありません。`bootstrap` は選択したbaseにないfeatureの変更を承認せず、作業ツリーの保護対象とguardソースが照合済みbaseと完全一致する場合だけ、baseの受入状態をローカルに再構成します。baseが進んで既存状態と異なるときは、人の端末から `python3 scripts/policy-guard.py bootstrap --remote-name origin` を実行します。状態ファイルが消えてもbaseと一致する内容は再構成できます。baseと異なるfeature変更の承認記録が消えた場合は停止し、その正確なcommitの再承認が必要です。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。状態とguardのコピーはcommon Git directoryでlinked worktree間に共有します。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
 
-native pre-pushは送信する全commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規refは全履歴を確認するため、過去の未承認snapshotがあれば公開を停止して人が確認します。通常ファイルの変更には追加承認不要です。
+policy guardは送信commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規・既存refとも、登録済みの送信先remoteのbaseブランチから到達できないcommitを検査します。baseブランチに含まれるcommitは受入済みと扱い、base専用の人手承認記録は作りません。既定のbaseは `refs/remotes/<remote>/HEAD` です。`develop` などをbaseにする場合は `git -c workflow.baseBranch=develop push ...` と指定します。どのbranchを受入済みbaseとするかは利用者の運用判断で、Rootが公開前に確認します。guardは送信先のbase refが示すOIDと手元のremote-tracking refを照合し、不一致・欠落・無関係な履歴では停止します。この照合は別接続なので、push時の受信側状態を原子的に証明しません。Gitleaksのnative pre-push検査は新規refの全到達可能履歴を引き続き対象にします。各pushの公開前確認も省略しません。通常ファイルの変更には追加承認不要です。
 
 `.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
 

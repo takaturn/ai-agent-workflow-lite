@@ -2,6 +2,7 @@
 """Actual local pushes and hook protocol checks; no external receiver or model."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -25,13 +26,21 @@ class PolicyGuardTest(unittest.TestCase):
     def setUp(self):
         self.setUpFixture()
         self.assertEqual(self.push().returncode,0)
+        self.assertEqual(self.git('fetch','-q','origin','main').returncode,0)
+        self.assertEqual(self.git('symbolic-ref','refs/remotes/origin/HEAD',
+                                  'refs/remotes/origin/main').returncode,0)
         (self.work/'scripts').mkdir()
         shutil.copy(BASE/'scripts/policy-guard.py', self.work/'scripts/policy-guard.py')
+        shutil.copy(BASE/'scripts/install-gitleaks-hook.py',
+                    self.work/'scripts/install-gitleaks-hook.py')
+        shutil.copy(BASE/'scripts/pre-push-gitleaks.py',
+                    self.work/'scripts/pre-push-gitleaks.py')
         (self.work/'config').mkdir()
         (self.work/'config/publication-policy.json').write_bytes((BASE/'config/publication-policy.json').read_bytes())
         (self.work/'AGENTS.md').write_text('Approved fixture rules\n')
         self.commit_all('policy')
-        self.assertEqual(self.guard('approve','--approval-ref','fixture-initial').returncode,0)
+        result=self.guard('approve','--approval-ref','fixture-initial')
+        self.assertEqual(result.returncode,0,result.stderr)
 
     def commit_all(self, message):
         self.assertEqual(self.git('add','.').returncode,0)
@@ -69,6 +78,151 @@ class PolicyGuardTest(unittest.TestCase):
         self.assertNotEqual(self.push().returncode,0)
         self.assertEqual(self.remote_oid(),before)
 
+    def test_new_ref_uses_fetched_base_without_a_local_base_approval(self):
+        state=json.loads((self.work/'.git/workflow-policy-approvals.json').read_text())
+        self.assertNotIn('public_bases',state)
+        self.assertEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+        self.assertEqual(self.remote_oid('refs/heads/feature'),
+                         self.git('rev-parse','HEAD').stdout.strip())
+
+    def test_changes_already_in_base_need_no_feature_reapproval(self):
+        (self.work/'AGENTS.md').write_text('Historical base rules\n')
+        self.commit_all('historical policy change')
+        (self.work/'AGENTS.md').write_text('Approved fixture rules\n')
+        self.commit_all('historical restore')
+        accepted_base=self.git('rev-parse','HEAD').stdout.strip()
+        self.assertEqual(self.process(['git','--git-dir',str(self.remote),'fetch','-q',
+            str(self.work),accepted_base+':refs/heads/main']).returncode,0)
+        self.assertEqual(self.git('update-ref','refs/remotes/origin/main',
+                                  accepted_base).returncode,0)
+        self.write_commit('feature content\n','feature work')
+        result=self.push('HEAD:refs/heads/feature')
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_develop_can_be_the_base_branch(self):
+        self.assertEqual(self.process(['git','--git-dir',str(self.remote),'update-ref',
+            'refs/heads/develop',self.base]).returncode,0)
+        self.assertEqual(self.git('fetch','-q','origin','develop').returncode,0)
+        self.assertEqual(self.git('update-ref','refs/remotes/origin/develop',self.base).returncode,0)
+        self.assertEqual(self.git('symbolic-ref','--delete',
+                                  'refs/remotes/origin/HEAD').returncode,0)
+        result=self.git('-c','workflow.baseBranch=develop','push','origin',
+                        'HEAD:refs/heads/feature')
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_other_destination_has_no_trusted_base(self):
+        alternate=self.root/'alternate.git'
+        self.assertEqual(self.process(['git','init','-q','--bare',str(alternate)]).returncode,0)
+        self.assertEqual(self.process(['git','--git-dir',str(alternate),'fetch','-q',
+            str(self.work),self.base+':refs/heads/main']).returncode,0)
+        self.assertEqual(self.git('remote','add','alternate',str(alternate)).returncode,0)
+        self.assertNotEqual(self.git('push','alternate','HEAD:refs/heads/feature').returncode,0)
+
+    def test_unapproved_intermediate_after_base_is_not_hidden(self):
+        (self.work/'AGENTS.md').write_text('Unapproved intermediate\n')
+        self.commit_all('unapproved change')
+        (self.work/'AGENTS.md').write_text('Approved fixture rules\n')
+        self.commit_all('restore')
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+        self.assertIsNone(self.remote_oid('refs/heads/feature'))
+
+    def test_base_ref_missing_locally_fails_closed(self):
+        self.assertEqual(self.git('symbolic-ref','--delete',
+                                  'refs/remotes/origin/HEAD').returncode,0)
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+
+    def test_tracking_ref_ahead_of_destination_is_rejected(self):
+        ahead=self.git('rev-parse','HEAD').stdout.strip()
+        self.assertEqual(self.git('update-ref','refs/remotes/origin/main',ahead).returncode,0)
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+        self.assertIsNone(self.remote_oid('refs/heads/feature'))
+
+    def test_existing_ref_does_not_trust_its_old_oid_as_approval(self):
+        self.seed()
+        (self.work/'AGENTS.md').write_text('Unapproved remote feature rules\n')
+        self.commit_all('unapproved feature policy')
+        bad=self.git('rev-parse','HEAD').stdout.strip()
+        (self.work/'AGENTS.md').write_text('Approved fixture rules\n')
+        self.commit_all('restore policy')
+        self.assertEqual(self.process(['git','--git-dir',str(self.remote),'fetch','-q',
+            str(self.work),bad+':refs/heads/feature']).returncode,0)
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+
+    def test_fresh_clone_bootstraps_only_base_policy(self):
+        self.seed()
+        self.assertEqual(self.process(['git','--git-dir',str(self.remote),
+            'symbolic-ref','HEAD','refs/heads/main']).returncode,0)
+        fresh=self.root/'fresh'
+        self.assertEqual(self.process(['git','clone','-q',str(self.remote),
+                                       str(fresh)]).returncode,0)
+        installer=[sys.executable,'scripts/install-gitleaks-hook.py']
+        result=self.process(installer,cwd=fresh)
+        self.assertEqual(result.returncode,0,result.stderr)
+        state=fresh/'.git/workflow-policy-approvals.json'
+        self.assertTrue(state.exists())
+        state.unlink()
+        result=self.process(installer,cwd=fresh)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertTrue(state.exists())
+        (fresh/'AGENTS.md').write_text('Unapproved feature rules\n')
+        state.unlink()
+        self.assertNotEqual(self.process(installer,cwd=fresh).returncode,0)
+
+    def test_guard_requires_native_hook_and_installer_in_policy(self):
+        spec=importlib.util.spec_from_file_location('guard_source',
+            BASE/'scripts/policy-guard.py')
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        policy=json.loads((BASE/'config/publication-policy.json').read_text())
+        for name in ('scripts/pre-push-gitleaks.py','scripts/install-gitleaks-hook.py'):
+            altered=dict(policy,protected_paths=[p for p in policy['protected_paths'] if p!=name])
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                module.paths_read(altered)
+
+    def test_approved_hook_upgrade_refuses_foreign_copy(self):
+        other=native.HookTest()
+        other.setUp()
+        try:
+            self.assertEqual(other.push().returncode,0)
+            (other.work/'scripts').mkdir()
+            shutil.copy(BASE/'scripts/policy-guard.py',other.work/'scripts/policy-guard.py')
+            shutil.copy(BASE/'scripts/install-gitleaks-hook.py',
+                        other.work/'scripts/install-gitleaks-hook.py')
+            old=b'#!/bin/sh\nexit 2\n'
+            (other.work/'scripts/pre-push-gitleaks.py').write_bytes(old)
+            hook=other.work/'.git/hooks/pre-push'
+            hook.write_bytes(old)
+            hook.chmod(0o700)
+            (other.work/'config').mkdir()
+            (other.work/'config/publication-policy.json').write_bytes(
+                (BASE/'config/publication-policy.json').read_bytes())
+            (other.work/'AGENTS.md').write_text('Approved fixture rules\n')
+            self.assertEqual(other.git('add','.').returncode,0)
+            self.assertEqual(other.git('commit','-qm','approved old hook').returncode,0)
+            guard=other.work/'scripts/policy-guard.py'
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','old-hook'],cwd=other.work).returncode,0)
+            new=(BASE/'scripts/pre-push-gitleaks.py').read_bytes()
+            (other.work/'scripts/pre-push-gitleaks.py').write_bytes(new)
+            self.assertEqual(other.git('add','.').returncode,0)
+            self.assertEqual(other.git('commit','-qm','approved new hook').returncode,0)
+            installer=[sys.executable,str(BASE/'scripts/install-gitleaks-hook.py'),
+                       '--upgrade-approved']
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),old)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','new-hook'],cwd=other.work).returncode,0)
+            foreign=b'#!/bin/sh\nexit 3\n'
+            hook.write_bytes(foreign)
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),foreign)
+            hook.write_bytes(old)
+            self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),new)
+            self.assertTrue(os.access(hook,os.X_OK))
+        finally:
+            other.doCleanups()
+
     def test_missing_state_and_malformed_event_deny(self):
         for payload in ('{}','[]','invalid json'):
             result=self.guard('hook',input=payload)
@@ -78,6 +232,8 @@ class PolicyGuardTest(unittest.TestCase):
         self.assertEqual(json.loads(self.hook().stdout)['hookSpecificOutput']['permissionDecision'],'deny')
         self.assertNotEqual(self.push().returncode,0)
         self.assertEqual(self.remote_oid(),self.base)
+        self.assertEqual(self.guard('approve','--approval-ref','recover-after-loss').returncode,0)
+        self.assertEqual(self.guard('check').returncode,0)
 
     def test_dirty_approval_reuse_and_symlink_refused(self):
         self.assertEqual(self.guard('approve','--approval-ref','fixture-initial').returncode,0)

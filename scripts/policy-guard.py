@@ -14,9 +14,9 @@ import tempfile
 POLICY = 'config/publication-policy.json'
 
 
-def git(*args):
+def git(*args, timeout=10):
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
-    return subprocess.check_output(['git', *args], stderr=subprocess.PIPE, env=env, timeout=10)
+    return subprocess.check_output(['git', *args], stderr=subprocess.PIPE, env=env, timeout=timeout)
 
 
 def digest(raw):
@@ -41,7 +41,10 @@ def paths_read(value):
     for name in paths:
         if not isinstance(name, str) or not name or Path(name).is_absolute() or any(p in ('..', '.') for p in name.split('/')):
             raise ValueError('invalid protected path')
-    if POLICY not in paths or 'scripts/policy-guard.py' not in paths or 'AGENTS.md' not in paths or '.codex' not in paths:
+    required = {POLICY, 'scripts/policy-guard.py', 'AGENTS.md', '.codex',
+                'scripts/install-gitleaks-hook.py', 'scripts/pre-push-gitleaks.py',
+                'scripts/publication-check.py'}
+    if not required.issubset(paths):
         raise ValueError('guard must protect its configuration')
     return paths
 
@@ -99,6 +102,85 @@ def check(value, revision=None):
         raise ValueError('policy change requires explicit approval')
 
 
+def feature_base(remote, location, head):
+    """Use the named remote's fetched base branch as the approved baseline."""
+    names = git('remote').decode().splitlines()
+    if remote not in names:
+        raise ValueError('push destination must be a configured remote')
+    urls = git('remote', 'get-url', '--push', '--all', remote).decode().splitlines()
+    if len(urls) != 1 or urls[0] != location:
+        raise ValueError('push destination does not match remote')
+    try:
+        branch = git('config', '--get', 'workflow.baseBranch').decode().strip()
+    except subprocess.CalledProcessError:
+        branch = None
+    prefix = f'refs/remotes/{remote}/'
+    if branch:
+        ref = prefix + branch
+        git('check-ref-format', ref)
+    else:
+        ref = git('symbolic-ref', '--quiet', prefix+'HEAD').decode().strip()
+    if not ref.startswith(prefix) or ref == prefix+'HEAD':
+        raise ValueError('invalid base branch')
+    remote_ref = 'refs/heads/' + ref[len(prefix):]
+    git('check-ref-format', remote_ref)
+    base = git('rev-parse', '--verify', '--end-of-options', ref+'^{commit}').decode().strip()
+    advertised = git('ls-remote', '--quiet', '--exit-code', '--refs',
+                     location, remote_ref, timeout=60).decode('ascii').splitlines()
+    if advertised != [base + '\t' + remote_ref]:
+        raise ValueError('fetched base does not match destination')
+    git('merge-base', head, base)
+    return base
+
+
+def bootstrap(remote):
+    """Recreate a local cache only from the verified, accepted base policy."""
+    urls = git('remote', 'get-url', '--push', '--all', remote).decode().splitlines()
+    if len(urls) != 1:
+        raise ValueError('base remote must have one push location')
+    head = git('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+    base = feature_base(remote, urls[0], head)
+    paths = paths_read(json.loads(Path(POLICY).read_bytes()))
+    candidate = snapshot(paths, base)
+    if snapshot(paths) != candidate:
+        raise ValueError('working policy differs from accepted base')
+    source = Path(__file__).read_bytes()
+    if source != git('show', base+':scripts/policy-guard.py'):
+        raise ValueError('guard source differs from accepted base')
+    state, installed = locations()
+    if state.is_symlink() or installed.is_symlink():
+        raise ValueError('symlink refused')
+    lock_path = state.parent/'.workflow-policy.lock'
+    if lock_path.is_symlink():
+        raise ValueError('policy lock symlink')
+    with lock_path.open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if state.exists():
+            previous = load()
+            if previous['paths'] != paths:
+                raise ValueError('protected path migration requires review')
+            approvals = previous['approvals']
+        else:
+            if installed.exists() and installed.read_bytes() != source:
+                raise ValueError('unrecognized installed guard')
+            approvals = []
+        entry = {'reference':'base:'+base, 'revision':base, 'snapshot':candidate}
+        matches = [old for old in approvals if old['reference'] == entry['reference']]
+        if matches:
+            if matches != [entry]:
+                raise ValueError('base record collision')
+            return
+        approvals.append(entry)
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists() or installed.read_bytes() != source:
+            atomic(installed, source, 0o700)
+        value = {'version':1, 'paths':paths, 'guard_sha256':digest(source),
+                 'approvals':approvals}
+        atomic(state, canonical(value))
+        if load() != value:
+            raise ValueError('base bootstrap read-back failed')
+
+
 def approve(reference):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', reference):
         raise ValueError('use a secret-free approval reference')
@@ -110,7 +192,9 @@ def approve(reference):
         previous = load() if state.exists() else None
         if previous and previous['paths'] != paths:
             raise ValueError('protected path changes require manual reviewed migration')
-        if not previous and installed.exists():raise ValueError('foreign installed guard')
+        source = Path(__file__).read_bytes()
+        if not previous and installed.exists() and installed.read_bytes() != source:
+            raise ValueError('foreign installed guard')
         head = git('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
         candidate = snapshot(paths, head)
         if snapshot(paths) != candidate:raise ValueError('commit the exact policy before approving')
@@ -121,23 +205,28 @@ def approve(reference):
             if matches != [entry]:raise ValueError('approval reference already used')
             return
         approvals.append(entry)
-        source = Path(__file__).read_bytes()
         installed.parent.mkdir(parents=True, exist_ok=True)
         atomic(installed, source, 0o700)
-        value = {'version':1, 'paths':paths, 'guard_sha256':digest(source), 'approvals':approvals}
+        value = {'version':1, 'paths':paths, 'guard_sha256':digest(source),
+                 'approvals':approvals}
         atomic(state, canonical(value))
         if load() != value:raise ValueError('approval read-back failed')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['approve', 'check', 'hook', 'pre-push'])
+    parser.add_argument('mode', choices=['approve', 'bootstrap', 'check', 'hook', 'pre-push'])
     parser.add_argument('--approval-ref')
+    parser.add_argument('--remote-name')
+    parser.add_argument('--remote-location')
     args = parser.parse_args()
     try:
         if args.mode == 'approve':
             approve(args.approval_ref or '')
             print('Policy approval recorded and installed guard verified')
+        elif args.mode == 'bootstrap':
+            bootstrap(args.remote_name or 'origin')
+            print('Accepted base policy installed and verified')
         else:
             if args.mode == 'hook':
                 event = json.load(sys.stdin)
@@ -146,16 +235,17 @@ def main():
             value = load()
             check(value)
             if args.mode == 'pre-push':
+                if not args.remote_name or not args.remote_location:
+                    raise ValueError('missing destination remote')
                 for line in sys.stdin:
-                    _, new, _, old = line.split()
+                    _, new, remote_ref, old = line.split()
                     if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', new) or not re.fullmatch('[0-9a-f]{'+str(len(new))+'}',old):
                         raise ValueError('invalid push identity')
                     if set(new) == {'0'}:continue
                     head = git('rev-parse', '--verify', new+'^{commit}').decode().strip()
-                    try:
-                        base = git('rev-parse', '--verify', old+'^{commit}').decode().strip()
-                    except subprocess.CalledProcessError:base = None
-                    for commit in git('rev-list', base+'..'+head if base else head, '--').decode().splitlines():
+                    base = feature_base(args.remote_name, args.remote_location, head)
+                    outgoing = git('rev-list', head, '^'+base, '--')
+                    for commit in outgoing.decode().splitlines():
                         check(value, commit)
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

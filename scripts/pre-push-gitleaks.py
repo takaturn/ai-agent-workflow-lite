@@ -88,7 +88,9 @@ def main():
         state = common/'workflow-policy-approvals.json'
         if state.exists() or Path('config/publication-policy.json').exists():
             guard = common/'hooks/workflow-policy-guard.py'
-            result = subprocess.run([sys.executable, str(guard), 'pre-push'],
+            result = subprocess.run([sys.executable, str(guard), 'pre-push',
+                                     '--remote-name', sys.argv[1],
+                                     '--remote-location', sys.argv[2]],
                 input='\n'.join(lines)+'\n', text=True, capture_output=True, timeout=60)
             if result.returncode:
                 print('pre-push: unapproved policy change or policy guard failure; push blocked', file=sys.stderr)
