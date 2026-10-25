@@ -23,6 +23,7 @@ MAX_REQUEST = 24 * 1024 * 1024
 MAX_TEXT = 128 * 1024
 TOOL_ENV = None
 SCANNER = 'gitleaks'
+LAST_FAILURE = None
 OID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
@@ -48,9 +49,18 @@ def digest(raw):
 
 
 def run(command, **kwargs):
+    global LAST_FAILURE
     if TOOL_ENV is not None and 'env' not in kwargs:
         kwargs['env'] = TOOL_ENV
-    return subprocess.run(command, capture_output=True, check=True, timeout=60, **kwargs)
+    try:
+        return subprocess.run(command, capture_output=True, check=True, timeout=60, **kwargs)
+    except subprocess.CalledProcessError as error:
+        operations = {'push','fetch','init','ls-remote','merge-base','stdin','api','bundle','fsck','cat-file','rev-list'}
+        operation = next((item for item in command if item in operations), 'other')
+        diagnostic = (error.stderr or b'').lower()
+        categories = [name for name in ('workflow','authentication','publickey','memory','timeout') if name.encode() in diagnostic]
+        LAST_FAILURE = {'tool':Path(command[0]).name, 'operation':operation, 'exit':error.returncode, 'categories':categories}
+        raise
 
 
 def scan(raw):
@@ -221,12 +231,15 @@ def dispatch(request, policy):
         def git(*args):
             return run(['git', '-c', 'protocol.allow=never',
                         '-c', 'protocol.file.allow=always', '-c', 'protocol.https.allow=always',
+                        '-c', 'protocol.ssh.allow=always',
+                        '-c', 'core.sshCommand=ssh -F /dev/null -oBatchMode=yes -oStrictHostKeyChecking=yes -oForwardAgent=no',
                         '-c', 'http.followRedirects=false',
                         '-c', 'credential.helper=!gh auth git-credential', *args], env=clean_env).stdout
         git('init', '-q', '--bare', '--template=', sender)
         git('-C', sender, 'fetch', '-q', '--no-tags', str(checked), 'refs/heads/submission:refs/heads/submission')
         remote = policy['git_remote']
-        if not (remote in ('https://github.com/'+policy['target'], 'https://github.com/'+policy['target']+'.git') or remote.startswith('file:///')):
+        if not (remote in ('https://github.com/'+policy['target'], 'https://github.com/'+policy['target']+'.git',
+                           'ssh://git@github.com/'+policy['target']+'.git') or remote.startswith('file:///')):
             raise ValueError('unsupported configured remote')
         # force-with-lease supplies the expected old OID but is not permission
         # to force: ancestry must also hold when the old ref exists.
@@ -248,7 +261,7 @@ def dispatch(request, policy):
 
 
 def serve(policy_path, key_path, state_path, socket_path, workspace_path):
-    global IMPORT_TOOL, TRANSPORT_INSTALLER, TOOL_ENV, SCANNER
+    global IMPORT_TOOL, TRANSPORT_INSTALLER, TOOL_ENV, SCANNER, LAST_FAILURE
     workspace = Path(workspace_path).resolve(strict=True)
     policy, fingerprint = policy_read(policy_path)
     key = Path(key_path).read_bytes()
@@ -306,11 +319,16 @@ def serve(policy_path, key_path, state_path, socket_path, workspace_path):
     SCANNER = str(tools/'gitleaks')
     connection = sqlite3.connect(state/'requests.sqlite')
     connection.execute('create table if not exists requests(nonce text primary key, digest text, status text)')
+    if 'failure' not in {column[1] for column in connection.execute('pragma table_info(requests)')}:
+        connection.execute('alter table requests add column failure text')
+        connection.commit()
     with socket.socket(socket.AF_UNIX) as listener:
         listener.bind(socket_path); os.chmod(socket_path, 0o600); listener.listen(8)
         while True:
             client, _ = listener.accept()
             with client:
+                reserved = None
+                LAST_FAILURE = None
                 try:
                     client.settimeout(15)
                     with client.makefile('rb') as stream:
@@ -326,8 +344,9 @@ def serve(policy_path, key_path, state_path, socket_path, workspace_path):
                     if not isinstance(envelope['approval'], str) or not hmac.compare_digest(expected, envelope['approval']):
                         raise ValueError('invalid approval')
                     with connection:
-                        connection.execute('insert into requests values(?,?,?)',
+                        connection.execute('insert into requests(nonce,digest,status) values(?,?,?)',
                             (request['nonce'], digest(canonical(request)), 'attempted'))
+                    reserved = request['nonce']
                     result = dispatch(request, policy)
                     with connection:
                         connection.execute('update requests set status=? where nonce=?', ('published', request['nonce']))
@@ -335,6 +354,10 @@ def serve(policy_path, key_path, state_path, socket_path, workspace_path):
                 except Exception:
                     # Consumed request IDs remain consumed even after an uncertain
                     # transport result; neither secrets nor raw errors are returned.
+                    if reserved is not None:
+                        with connection:
+                            connection.execute('update requests set status=?,failure=? where nonce=?',
+                                ('uncertain', canonical(LAST_FAILURE or {'stage':'validation-or-readback'}).decode(), reserved))
                     response = {'status': 'blocked'}
                 with contextlib.suppress(OSError):
                     client.sendall(canonical(response)+b'\n')

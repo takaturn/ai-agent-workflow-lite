@@ -6,9 +6,9 @@
 
 - 要求はversion、operation、固定target/subject、policy digest、期限（最大5分）、nonce、payloadに限定します。未知fieldを拒否します。
 - 信頼側の文脈レビュー後、issuerが要求全体へHMAC承認を発行します。署名鍵・policy・publisher stateは要求側workspaceの外へ置き、要求側へ渡しません。Rootの自己申告だけでは送信できません。HMACのissuerとpublisherは同じ信頼領域で、双方を要求側から隔離する構成です。
-- publisherは承認を検証し、nonceをSQLiteで消費してから送信します。再起動後も再利用できません。送信結果が不明でも自動返却・自動再送しません。
+- publisherは承認を検証し、nonceをSQLiteで消費してから送信します。再起動後も再利用できません。送信結果が不明でも自動返却・自動再送しません。trusted audit stateにはtool/operation/exitの定型コードだけを残し、候補値やraw stderrを保存しません。
 - 初期Git操作は単一の許可branchへのfast-forward更新のみです。要求は全履歴を含む単一refのbundle、new OID、expected old OIDを指定します。取り込みを資格情報・networkのないnamespaceで行い、raw commit、tree名、全blobを検査します。tag/submodule/binary/未知objectは拒否します。
-- Gitは検査後に再生成したbundleをクリーンなbare senderへ取り込み、固定remote/refへ送信します。旧OIDのleaseと祖先関係の両方を確認し、force更新・追加ref・削除を許可しません。送信側にも既存installerでnative pre-pushを導入・照合し、無効化せず実行します。公開後OIDを読み戻します。
+- Gitは検査後に再生成したbundleをクリーンなbare senderへ取り込み、固定remote/refへ送信します。HTTPSに加え、固定した `ssh://git@github.com/owner/repository.git` を許可し、SSHはユーザー設定/forwardingを使わない固定オプションと既存のhost認証で送信できます。新しいcredential権限は自動付与しません。旧OIDのleaseと祖先関係の両方を確認し、force更新・追加ref・削除を許可しません。送信側にも既存installerでnative pre-pushを導入・照合し、無効化せず実行します。公開後OIDを読み戻します。
 - API操作はpolicyに列挙した固定repository/Issue番号へのコメントPOST、body fieldだけです。PR作成/本文更新、Issue更新、返信、thread resolve、任意endpoint/URL/shellは未対応として拒否します。read-backでbodyと返却IDを確認します。
 - GitHub APIの認証は信頼側のgh設定を使用し、Git HTTPSでは固定のgh credential helperを使います。App作成や既存認証の移動/失効は自動実施しません。実際のアカウント・permissionの最小化と確認は配備前の条件です。
 - 信頼側toolは受理前にworkspace外から固定コピーし、workspace内の実行ファイルを拒否します。Gitleaks不在・検出・異常・timeout、署名不一致、期限切れ、policy/target/subject不一致、旧OID不一致は公開を止めます。scanner生出力・候補値・認証情報は返しません。
@@ -46,7 +46,7 @@ installerはサービスを起動せず、現在のRootも移行しません。�
 }
 ```
 
-`file:///` remoteは隔離試験のローカルreceiver用です。管理者が信頼側で選ぶ固定値であり、要求側には選ばせません。実環境では許可したrepositoryのHTTPS remoteと最小権限の認証を管理者が確認します。
+`file:///` remoteは隔離試験のローカルreceiver用です。管理者が信頼側で選ぶ固定値であり、要求側には選ばせません。実環境では許可したrepositoryのHTTPS/SSH remoteと最小権限の認証を管理者が確認します。
 
 ステージ済みコピーでサービスを起動するコマンド:
 
