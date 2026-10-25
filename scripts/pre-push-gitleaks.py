@@ -8,6 +8,10 @@ import tempfile
 from pathlib import Path
 
 
+class UnsupportedSubmodule(ValueError):
+    pass
+
+
 def git(*args):
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
     return subprocess.check_output(['git', '-c', 'color.ui=false', *args],
@@ -58,6 +62,9 @@ def snapshots(lines):
         # Formatted log omits extra headers and embedded mergetags. Inspect
         # the original commit objects as well as the file patches.
         for outgoing in git('rev-list', revision, '--').decode('ascii').splitlines():
+            tree = git('ls-tree', '-r', '-z', '--full-tree', outgoing)
+            if any(entry.startswith(b'160000 ') for entry in tree.split(b'\x00')):
+                raise UnsupportedSubmodule()
             payloads.append(git('cat-file', 'commit', outgoing))
         patch = git('-c', 'core.quotePath=true', 'log', '--no-ext-diff',
                     '--no-textconv', '--no-notes', '--format=fuller', '--root',
@@ -77,6 +84,9 @@ def main():
         if len(sys.argv) != 3:
             raise ValueError('not a Git pre-push invocation')
         lines = sys.stdin.read().splitlines()
+        index = git('ls-files', '--stage', '-z')
+        if any(entry.startswith(b'160000 ') for entry in index.split(b'\x00')):
+            raise UnsupportedSubmodule()
         if lines and git('rev-parse', '--is-shallow-repository').strip() != b'false':
             raise ValueError('shallow history unsupported')
         payloads, count = snapshots(lines)
@@ -101,6 +111,9 @@ def main():
                     raise ValueError('candidate or scanner failure')
         print('pre-push: Gitleaks passed for all outgoing ref updates', file=sys.stderr)
         return 0
+    except UnsupportedSubmodule:
+        print('pre-push: submodule content is unsupported; push blocked', file=sys.stderr)
+        return 2
     except (OSError, ValueError, subprocess.SubprocessError):
         # Neither candidate values nor raw diagnostics/URLs reach the terminal.
         print('pre-push: secret scan detected a candidate or failed; push blocked', file=sys.stderr)

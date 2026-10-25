@@ -182,6 +182,44 @@ class HookTest(unittest.TestCase):
         self.assertNotEqual(self.push().returncode, 0)
         self.assertEqual(self.remote_oid(), self.base)
 
+    def test_recursive_submodule_push_cannot_update_unscanned_receiver(self):
+        self.git('branch', '-M', 'main')
+        self.assertEqual(self.push().returncode, 0)
+        source = self.root/'sub-source'
+        receiver = self.root/'sub-receiver.git'
+        self.process(['git', 'init', '-q', str(source)])
+        self.process(['git', 'init', '-q', '--bare', str(receiver)])
+        for key, value in [('user.name', 'Fixture'), ('user.email', 'fixture@example.invalid')]:
+            self.git('config', key, value, cwd=source)
+        (source/'data').write_text('public submodule')
+        self.git('add', 'data', cwd=source); self.git('commit', '-qm', 'sub base', cwd=source)
+        sub_base = self.git('rev-parse', 'HEAD', cwd=source).stdout.strip()
+        self.assertEqual(self.git('push', str(receiver), 'HEAD:refs/heads/main', cwd=source).returncode, 0)
+        self.process(['git', '--git-dir', str(receiver), 'symbolic-ref', 'HEAD', 'refs/heads/main'])
+        self.env['GIT_ALLOW_PROTOCOL'] = 'file'
+        added = self.git('-c', 'protocol.file.allow=always', 'submodule', 'add', str(receiver), 'modules/sub')
+        self.assertEqual(added.returncode, 0, added.stderr)
+        sub = self.work/'modules/sub'
+        self.git('config', 'user.name', 'Fixture', cwd=sub)
+        self.git('config', 'user.email', 'fixture@example.invalid', cwd=sub)
+        (sub/'data').write_text('fixture-sensitive')
+        self.git('add', 'data', cwd=sub); self.git('commit', '-qm', 'unsafe sub', cwd=sub)
+        self.git('add', '.gitmodules', 'modules/sub'); self.git('commit', '-qm', 'add submodule')
+        self.git('config', 'push.recurseSubmodules', 'on-demand')
+        denied = self.push()
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn('submodule content is unsupported; push blocked', denied.stderr)
+        self.assertEqual(self.remote_oid(), self.base)
+        sub_after = self.process(['git', '--git-dir', str(receiver), 'rev-parse', 'refs/heads/main']).stdout.strip()
+        self.assertEqual(sub_after, sub_base)
+        for mode in ('on-demand', 'only'):
+            result = self.push('--recurse-submodules='+mode, 'HEAD:refs/heads/main')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('submodule content is unsupported; push blocked', result.stderr)
+            after = self.process(['git', '--git-dir', str(receiver), 'rev-parse', 'refs/heads/main']).stdout.strip()
+            self.assertEqual(after, sub_base)
+            self.assertEqual(self.remote_oid(), self.base)
+
     def test_shallow_history_is_refused(self):
         (self.work/'.git/shallow').write_text(self.base+'\n')
         result = self.push()

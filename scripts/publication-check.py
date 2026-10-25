@@ -36,14 +36,26 @@ def snapshot(args):
         endpoints = args.git_range.split('..')
         if any(not endpoint or endpoint.startswith('-') for endpoint in endpoints):
             raise ValueError('two revision endpoints required')
+        git_env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
         commits = [subprocess.check_output(['git', 'rev-parse', '--verify',
-                    '--end-of-options', endpoint+'^{commit}'], stderr=subprocess.PIPE)
+                    '--end-of-options', endpoint+'^{commit}'], stderr=subprocess.PIPE, env=git_env)
                     .decode('ascii').strip() for endpoint in endpoints]
         resolved_range = commits[0]+'..'+commits[1]
-        data = subprocess.check_output(['git', '-c', 'core.quotePath=true', 'log',
+        data = subprocess.check_output(['git', '-c', 'color.ui=false', '-c', 'core.quotePath=true', 'log',
             '--no-ext-diff', '--no-textconv', '--format=fuller', '--binary', '-p',
             '--diff-merges=first-parent', '--no-renames', resolved_range, '--'],
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE, env=git_env)
+        raw_objects = []
+        outgoing = subprocess.check_output(['git', 'rev-list', resolved_range, '--'],
+                                          stderr=subprocess.PIPE, env=git_env)
+        for oid in outgoing.decode('ascii').splitlines():
+            raw = subprocess.check_output(['git', 'cat-file', 'commit', oid],
+                                          stderr=subprocess.PIPE, env=git_env)
+            raw.decode('utf-8')
+            if b'\x00' in raw:
+                raise ValueError('binary commit metadata unsupported')
+            raw_objects.append({'oid': oid, 'sha256': digest(raw)})
+            payloads.append(raw)
         if any(line == b'GIT binary patch' or
                (line.startswith(b'Binary files ') and line.endswith(b' differ'))
                for line in data.splitlines()):
@@ -51,7 +63,8 @@ def snapshot(args):
         if not data:
             raise ValueError('empty Git range')
         data.decode('utf-8')
-        revision = {'range': args.git_range, 'resolved_range': resolved_range, 'sha256': digest(data)}
+        revision = {'range': args.git_range, 'resolved_range': resolved_range, 'sha256': digest(data),
+                    'raw_commits': raw_objects}
         payloads.append(data)
     command = args.command
     if command and command[0] == '--':

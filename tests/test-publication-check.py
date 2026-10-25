@@ -154,6 +154,22 @@ class PublicationTest(unittest.TestCase):
             result = self.invoke('prepare', '--context-reviewed', '--git-range', base+'..HEAD')
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_raw_commit_header_is_scanned(self):
+        git, base = self.git_fixture()
+        tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
+        raw = (f'tree {tree}\nparent {base}\n'
+               'author Fixture <fixture@example.invalid> 1700000000 +0000\n'
+               'committer Fixture <fixture@example.invalid> 1700000000 +0000\n'
+               'x-private fixture-sensitive\n\npublic message\n')
+        oid = subprocess.check_output(['git', 'hash-object', '-t', 'commit', '-w', '--stdin'],
+            input=raw.encode(), cwd=self.root).decode().strip()
+        with tempfile.TemporaryDirectory() as state:
+            self.env['XDG_STATE_HOME'] = state
+            result = self.invoke('prepare', '--context-reviewed', '--git-range', base+'..'+oid)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('publication blocked', result.stderr)
+            self.assertFalse(self.marker.exists())
+
     def test_missing_scanner_blocks(self):
         (self.bin/'gitleaks').unlink()
         (self.bin/'git').symlink_to(shutil.which('git'))

@@ -29,8 +29,8 @@ class LaunchGateTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
         return result
 
-    def approve(self, task, count, model="fixture-model", path="run-agent"):
-        return self.call(task, "approve", "--approval-ref", "user-approval-fixture",
+    def approve(self, task, count, model="fixture-model", path="run-agent", reference="user-approval-fixture"):
+        return self.call(task, "approve", "--approval-ref", reference,
                          "--provider", "fixture-provider", "--model", model,
                          "--additional-launches", str(count), "--paths", path)
 
@@ -64,7 +64,7 @@ class LaunchGateTest(unittest.TestCase):
     def test_approved_addition_and_explicit_stop(self):
         self.approve("task-a", 1)
         self.reserve("task-a", "first")
-        self.approve("task-a", 2, model="second-model", path="run-agent")
+        self.approve("task-a", 2, model="second-model", path="run-agent", reference="second-approval")
         data = self.status("task-a")
         self.assertEqual(len(data["approvals"]), 2)
         self.assertEqual(data["stop"]["reason"], None)
@@ -73,7 +73,7 @@ class LaunchGateTest(unittest.TestCase):
         self.reserve("task-a", "old-model-exhausted", ok=False)
         self.call("task-a", "stop")
         self.reserve("task-a", "stopped", ok=False)
-        self.approve("task-a", 1)
+        self.approve("task-a", 1, reference="after-stop-approval")
         self.assertEqual(self.status("task-a")["stop"]["reason"], "explicit_stop")
 
     def test_parallel_reservations_and_crash_count(self):
@@ -118,6 +118,36 @@ class LaunchGateTest(unittest.TestCase):
                 data["reservations"][0]["approval_index"] = 10
             state.write_text(json.dumps(data))
             self.reserve(task, "next", ok=False)
+
+    def test_approval_retry_is_idempotent_and_cannot_refill(self):
+        self.approve("retry", 1)
+        self.reserve("retry", "first")
+        self.approve("retry", 1)
+        data = self.status("retry")
+        self.assertEqual(len(data["approvals"]), 1)
+        self.assertEqual(data["stop"]["reason"], "limit_reached")
+        self.reserve("retry", "unauthorized-retry", ok=False)
+
+    def test_same_approval_event_cannot_change_parameters(self):
+        self.approve("conflict", 1)
+        result = self.call("conflict", "approve", "--approval-ref", "user-approval-fixture",
+            "--provider", "fixture-provider", "--model", "fixture-model",
+            "--additional-launches", "2", "--paths", "run-agent", ok=False)
+        self.assertIn("already exists with different parameters", result.stderr)
+        self.assertEqual(len(self.status("conflict")["approvals"]), 1)
+
+    def test_concurrent_same_approval_event_is_recorded_once(self):
+        command = ["python3", str(GATE), "--task-id", "same-event", "--worktree", self.worktree,
+            "approve", "--approval-ref", "one-user-event", "--provider", "fixture-provider",
+            "--model", "fixture-model", "--additional-launches", "1", "--paths", "run-agent"]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(lambda _: subprocess.run(command, env=self.env,
+                capture_output=True, text=True), range(8)))
+        self.assertTrue(all(result.returncode == 0 for result in outcomes))
+        self.assertEqual(sum(json.loads(result.stdout)["approval_recorded"] for result in outcomes), 1)
+        self.assertEqual(len(self.status("same-event")["approvals"]), 1)
+        self.reserve("same-event", "first")
+        self.reserve("same-event", "second", ok=False)
 
     def test_prelaunch_error_is_counted(self):
         self.approve("prelaunch", 1)

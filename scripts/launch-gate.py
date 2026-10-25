@@ -75,6 +75,7 @@ def validate(data, task_id):
     if stop["at"] is not None:
         timestamp(stop["at"])
     total = 0
+    approval_refs = set()
     for item in approvals:
         if not isinstance(item, dict) or not isinstance(item.get("reference"), str) or not item["reference"].strip():
             fail("invalid approval reference")
@@ -89,6 +90,9 @@ def validate(data, task_id):
                 any(not isinstance(path, str) or path not in PATHS for path in paths) or
                 len(paths) != len(set(paths))):
             fail("invalid approved paths")
+        if item["reference"] in approval_refs:
+            fail("duplicate approval event reference")
+        approval_refs.add(item["reference"])
         timestamp(item["at"])
         total += item["additional_launches"]
     ids = set()
@@ -183,6 +187,15 @@ def run(args):
                 fail("approval reference and positive additional allowance required")
             if len(args.paths) != len(set(args.paths)):
                 fail("duplicate approved path")
+            previous = next((a for a in data["approvals"] if a["reference"] == args.approval_ref), None)
+            if previous is not None:
+                if (previous["provider"] != args.provider or previous["model"] != args.model or
+                        set(previous["paths"]) != set(args.paths) or
+                        previous["additional_launches"] != args.additional_launches):
+                    fail("approval reference already exists with different parameters")
+                print(json.dumps({"task_id": args.task_id, "allowance": total,
+                                  "used": len(data["reservations"]), "approval_recorded": False}))
+                return
             data["approvals"].append({"at": now(), "reference": args.approval_ref,
                 "provider": args.provider, "model": args.model, "paths": args.paths,
                 "additional_launches": args.additional_launches})

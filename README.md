@@ -45,7 +45,7 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 
 `LAUNCH_TASK_ID` は明示必須です。run名、Pane、worktree、再開に依存しない同じIDを同じ承認済みタスクの全実行で使ってください。別タスクとは重複しないIDにします。`XDG_STATE_HOME` も全worktreeで共通のGit管理外ディレクトリに固定します。policyと予約は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-gate/<task-id>/state.json` に保存され、ユーザー専用のlockで排他的に更新されます。単位は **予約された子CLI起動枠1回** です。Pane作成の前に枠を予約するため、Pane作成失敗も枠を消費します。
 
-`approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
+`approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。`--approval-ref` はタスク内で一意な承認イベントIDとして扱います。同じ参照・同じ内容の再登録はno-opで、上限到達や明示停止も解除しません。同じ参照で内容を変更した再登録は拒否し、別途承認された追加枠には新しい参照を使います。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
 
 ```bash
 python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
@@ -160,7 +160,7 @@ python3 tests/test-gitleaks-hook.py
 
 installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkなどの場合は上書きしません。同じコピーなら再実行はno-opです。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
 
-新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。refの削除は新しい内容を送らないため検査対象外です。
+新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
 
 Gitleaksは組み込みルールを明示して使用し、repo/env設定やignoreコメントでの抑制を受け付けません。scanner不在・検出・異常・timeoutはpush失敗とし、候補値・生の診断出力・認証情報を含む可能性のあるremote URLは表示しません。テストは使い捨てのローカルbare repositoryで実際のpushを行い、拒否時に受信refが変わらないことを確認します。実Gitleaksによる検証とは区別します。
 
@@ -181,8 +181,13 @@ python3 scripts/publication-check.py publish --target owner/repo:pr:19 \
   gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
 ```
 
-pushは同様に `--git-range origin/main..HEAD` と送信する正確なrefspecを指定します。全送信commit・途中で削除した内容・commit message・merge固有差分を検査します。rangeは両端をcommitへ解決した `base..head` 形式だけを受け付けます。binary patch、NULを含むファイル、UTF-8でない入力は対応外として公開を停止します。画像・アーカイブなどは専用の内容確認手順が必要です。複数ref、tag、添付物などは全対象を明示して確認できる場合に限ります。`--file` は複数指定できます。target文字列はRootが実送信先と一致を確認します。secretをcommand引数に含めず、認証は既存の安全な設定を使ってください。
+pushは同様に `--git-range origin/main..HEAD` と送信する正確なrefspecを指定します。全送信commit・途中で削除した内容・commit message・merge固有差分を検査します。整形ログに現れない追加ヘッダー/mergetagもraw commit objectとして検査し、OIDと内容ハッシュを検査記録へ含めます。rangeは両端をcommitへ解決した `base..head` 形式だけを受け付けます。binary patch、NULを含むファイル、UTF-8でない入力は対応外として公開を停止します。画像・アーカイブなどは専用の内容確認手順が必要です。複数ref、tag、添付物などは全対象を明示して確認できる場合に限ります。`--file` は複数指定できます。target文字列はRootが実送信先と一致を確認します。secretをcommand引数に含めず、認証は既存の安全な設定を使ってください。
 
 未検査・scanner失敗/不在・候補検出・本文/commit範囲/command/cwd/target変更・既使用記録は拒否します。直前に自動再検査し、送信要求の前に記録を使用済みにします。失敗した送信を再試行する場合も新しい検査記録が必要です。記録は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/publication-check/` に対象ファイルのパスとハッシュ、commit範囲のハッシュ、commandのハッシュ、時刻、文脈確認申告だけを保存します。秘密の候補値・本文・scanner生出力は保存しません。
 
 raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが入力を変更する競合、外部サービス側で生成されるログは自動保護しません。対象を固定し、単一Rootで操作し、送信後に実対象を読み戻します。自動検出0件を「秘匿情報なし」の保証にしません。モデルなしの動作検証は `python3 tests/test-publication-check.py` です。
+
+
+### 未解決の公開防止要件
+
+ローカルhookと公開前ラッパーは、送信資格情報を持つ同じ主体が無効化・省略できます。未導入clone、hook無効化、raw CLIによるPR/Issue投稿を含む未検査公開そのものを強制的に防ぐ要件は未解決であり、mergeの阻害要因として保持します。資格情報を分離したpublisherや受信側制御は未実装・未検証で、現在の実装をその代替と扱いません。これらの権限設計・設定変更には別途スコープの合意が必要です。
