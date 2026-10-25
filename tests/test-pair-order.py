@@ -10,9 +10,9 @@ import tempfile
 BASE = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    scripts = root / 'scripts'
-    scripts.mkdir()
-    shutil.copy2(BASE / 'scripts/run-pair.sh', scripts / 'run-pair.sh')
+    scripts = root / '.agents/scripts'
+    scripts.mkdir(parents=True)
+    shutil.copy2(BASE / '.agents/scripts/run-pair.sh', scripts / 'run-pair.sh')
     for name in ('a', 'b'):
         (root / name).mkdir()
     task = root / 'task'

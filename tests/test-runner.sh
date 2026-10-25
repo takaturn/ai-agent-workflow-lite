@@ -55,7 +55,7 @@ export HERDR_ENV=1 HERDR_PANE_ID=parent
 export LAUNCH_TASK_ID=runner-fixture
 # These are fixture attestations only; no production approval is inferred.
 fixture_policy() {
-  XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+  XDG_STATE_HOME="$1" python3 "$base/.agents/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
     --worktree "$tmp/work" \
     approve --approval-ref fixture-only --provider codex --model gpt-6-luna \
     --additional-launches 100 --paths run-agent >/dev/null
@@ -67,34 +67,34 @@ for state_dir in "$tmp/state" "$tmp/lifecycle" "$tmp/mutated" \
   fixture_policy "$state_dir"
 done
 
-test "$(bash "$base/scripts/herdr-context.sh")" = parent
-if HERDR_ENV=0 bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+test "$(bash "$base/.agents/scripts/herdr-context.sh")" = parent
+if HERDR_ENV=0 bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: missing Herdr context accepted' >&2; exit 1
 fi
-if HERDR_PANE_ID=stale bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+if HERDR_PANE_ID=stale bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: pane absent from live layout accepted' >&2; exit 1
 fi
-if HERDR_PANE_ID='' bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+if HERDR_PANE_ID='' bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: missing pane id accepted' >&2; exit 1
 fi
 
 printf 'Do nothing and report.\n' >"$tmp/task.txt"
 # Caller-controlled labels cannot select a different reservation route.
-if (cd "$tmp/work" && LAUNCH_PATH=run-pair bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/path-output" 2>"$tmp/path-error"); then
+if (cd "$tmp/work" && LAUNCH_PATH=run-pair bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/path-output" 2>"$tmp/path-error"); then
   echo 'FAIL: caller-selected route accepted' >&2; exit 1
 fi
 grep -q 'LAUNCH_PATH is unsupported' "$tmp/path-error"
 
 # Missing approval policy must stop before a child pane is created.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/no-policy" TEST_ACTIONS="$tmp/no-policy-actions" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/no-policy-error"); then
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/no-policy-error"); then
   echo 'FAIL: missing launch policy accepted' >&2; exit 1
 fi
 grep -q 'launch reservation denied' "$tmp/no-policy-error"
 if grep -Eq '^(pane split|agent start)$' "$tmp/no-policy-actions"; then
   echo 'FAIL: missing policy launched a child' >&2; exit 1
 fi
-(cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
+(cd "$tmp/work" && bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
@@ -111,12 +111,12 @@ grep -Fq "Agent target: name=$name pane=child" "$tmp/error"
 
 # Herdr reports an unseen completion as done, which is also ready for input.
 (cd "$tmp/work" && TEST_AGENT_STATUS=done \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/done-output")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/done-output")
 grep -q '^result: done' "$tmp/done-output"
 
 # Intermediate checkpoints must be visible before the next external step.
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/lifecycle" TEST_INSPECT_STATE=1 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/lifecycle-output" 2>"$tmp/lifecycle-error")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/lifecycle-output" 2>"$tmp/lifecycle-error")
 grep -q '^Run started: run_id=' "$tmp/lifecycle-error"
 grep -q '^result: done' "$tmp/lifecycle-output"
 
@@ -129,7 +129,7 @@ mktemp() {
 }
 export -f mktemp
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/mutated" TEST_MUTATE_TASK=1 TEST_TASK_FILE="$tmp/task.txt" TEST_CAPTURE_PROMPT="$tmp/captured-prompt" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/mutated-output" 2>"$tmp/mutated-error")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/mutated-output" 2>"$tmp/mutated-error")
 unset -f mktemp
 summary_path=
 while IFS= read -r line; do
@@ -149,7 +149,7 @@ export -f jq
 for phase in initialized pane_created agent_ready prompt_wait result_collected; do
   : >"$tmp/checkpoint-actions"
   if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/checkpoint-$phase" TEST_FAIL_PHASE=$phase TEST_ACTIONS="$tmp/checkpoint-actions" \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/checkpoint-output" 2>"$tmp/checkpoint-error"); then
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/checkpoint-output" 2>"$tmp/checkpoint-error"); then
     echo "FAIL: $phase checkpoint failure accepted" >&2; exit 1
   fi
   grep -q 'cannot record run checkpoint' "$tmp/checkpoint-error"
@@ -166,7 +166,7 @@ unset -f jq
 # Non-ready states must not reach the successful result read.
 for agent_status in working blocked unknown; do
   if (cd "$tmp/work" && TEST_AGENT_STATUS="$agent_status" \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
     >"$tmp/refused-output" 2>"$tmp/refused-error"); then
     echo "FAIL: $agent_status agent accepted" >&2; exit 1
   fi
@@ -179,7 +179,7 @@ for failure in start prompt; do
   start_exit=0; prompt_exit=0
   if [[ $failure == start ]]; then start_exit=34; else prompt_exit=35; fi
   if (cd "$tmp/work" && TEST_START_EXIT=$start_exit TEST_PROMPT_EXIT=$prompt_exit \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
     >"$tmp/failed-output" 2>"$tmp/failed-error"); then
     echo "FAIL: $failure failure accepted" >&2; exit 1
   fi
@@ -204,7 +204,7 @@ done
 
 # A failed pane split is prelaunch_error; the consumed reservation remains.
 if (cd "$tmp/work" && TEST_SPLIT_EXIT=42 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
   >"$tmp/prelaunch-output" 2>"$tmp/prelaunch-error"); then
   echo 'FAIL: pane split failure accepted' >&2; exit 1
 fi
@@ -218,7 +218,7 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="pr
 
 # TERM during prompt is recorded as interrupted, without refund.
 if (cd "$tmp/work" && TEST_PROMPT_SIGNAL=1 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
   >"$tmp/interrupted-output" 2>"$tmp/interrupted-error"); then
   echo 'FAIL: interrupted prompt accepted' >&2; exit 1
 fi
@@ -232,7 +232,7 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="in
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1); then
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1); then
   echo 'FAIL: in-repo state accepted' >&2; exit 1
 fi
 [[ ! -e "$tmp/work/state" ]] || { echo 'FAIL: rejected state path created files' >&2; exit 1; }

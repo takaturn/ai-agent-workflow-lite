@@ -2,16 +2,18 @@
 
 CLI から **必要なときだけサブエージェントを起動し、その作業を Herdr の Pane で見える化する**ための小さな実験用テンプレートです。
 
+AIの起動・結果回収・Root終了判定に使うスクリプトは `.agents/scripts/`、公開検査・Git hook・publisher試作は `scripts/` に置きます。
+
 旧 `ai-agent-workflow-template` のコード・設計契約は引き継ぎません。特に Run Manifest / Evidence Contract / 複雑な再入 Policy は作りません。
 
 ## v0 の範囲
 
 - `.agents/skills/orchestrate/SKILL.md`: Root が実装とレビューを必要に応じて委譲する
-- `scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
-- `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
-- `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
-- `scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
-- `scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
+- `.agents/scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
+- `.agents/scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
+- `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
+- `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
+- `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
@@ -26,17 +28,17 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 Herdr が管理する Pane 内で:
 
 ```bash
-bash scripts/herdr-context.sh
+bash .agents/scripts/herdr-context.sh
 bash tests/test-runner.sh
 
 # デモ用タスクファイル。秘密情報は書かない。
 printf '%s\n' 'READMEの誤字を一箇所だけ修正し、差分を確認して報告する。' > /tmp/ai-work-demo.txt
 export LAUNCH_TASK_ID=issue-51-demo # 同じタスクの全worktree・再開で固定
 # 以下はユーザーの明示承認が既にある場合だけ実行する。
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
   --approval-ref '<承認記録の参照>' --provider codex --model gpt-6-luna \
   --additional-launches 1 --paths run-agent
-bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
+bash .agents/scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
@@ -48,9 +50,9 @@ bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 `approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。`--approval-ref` はタスク内で一意な承認イベントIDとして扱います。同じ参照・同じ内容の再登録はno-opで、上限到達や明示停止も解除しません。同じ参照で内容を変更した再登録は拒否し、別途承認された追加枠には新しい参照を使います。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
 
 ```bash
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
 # ユーザーが停止を明示したとき:
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
 python3 tests/test-launch-gate.py
 ```
 
@@ -65,12 +67,16 @@ python3 tests/test-launch-gate.py
 結果回収後も `root_acceptance=pending`・`cleanup=retained` のままです。Rootが成果・focused testsを独立確認してから、返されたsummaryと短い検証メモで明示的に受け入れます。
 
 ```bash
-bash scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root検証: 成果とfocused testsを確認、秘密情報なし'
+bash .agents/scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root検証: 成果とfocused testsを確認、秘密情報なし'
 ```
 
 helperは同じ親Root・子Pane・agent名・cwd・idle/doneを照合し、受入記録→当該Paneのclose→親layout読戻しの順に処理します。これはRootの検証済みという申告を記録するもので、成果の正しさを自動判定しません。受入とclose結果は別管理で、close未確認ならacceptedでもretainedを残して停止します。close応答の消失も再送せずlayoutで確認し、closedはlayoutで裏付けられた場合だけ記録します。close後の記録失敗は、明示的な再実行で同じ受入Rootと元の検証メモを保持し、親が存在・子が不在ならcloseを再送せずclosedへ収束させます。受入済み・片付け済みの再実行はlayoutと一致する場合だけno-opです。
 
 close要求前に `close_attempted=true` を保存します。要求後も子が見える場合、応答失敗や反映遅延の可能性があるため再実行でもcloseを再送せず、Rootの手動確認で停止します。信頼できる当該タスクのsummaryだけを使い、処理中にPaneを移動・再割当しないでください。失敗・非完了・本人不一致は保持して停止し、自動retry・worktree削除・mergeは行いません。旧summaryや失敗からの手動回復は、既存の本人・状態照合とRoot判断が必要です。決定論的な検証は `python3 tests/test-finish-agent.py`（Herdr模擬）で、実機検証と区別します。
+
+## Root終了前の検査（Issue #15、実機受入前）
+
+`.agents/scripts/root-exit-check.py` はRootが登録したタスク一覧、宣言したworktreeのrun summary、起動ゲートを照合するモデルなしcheckerです。必要作業・回収・受入・必要なcleanup・公開/read-backが残れば通常完了にしません。この判定はRootの登録漏れがないことと確認結果の申告に依存します。任意のCodex Stop接続では、外部stateに保存した回数・時間の上限と明示停止を尊重します。有効化されない接続例と手順、自己申告の限界、実機未検証の範囲は [Root終了ゲート](docs/root-exit-gate.md) を参照してください。`python3 -B tests/test-root-exit-check.py` はfixture検証であり、hook有効化や実機受入の証拠ではありません。
 
 ## Worker の branch / worktree 分離（Issue #4）
 
@@ -85,7 +91,7 @@ git branch --list feature/issue4
 # 上記を確認し、汚れ・既存branch・既存割当があれば停止して調査する。
 # 存在する親ディレクトリの絶対パスを指定する。リポジトリ外を推奨。
 git worktree add -b feature/issue4 /absolute/worker-root/issue-4-worker-a HEAD
-bash scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
+bash .agents/scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
 ```
 
 確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。命名は `feature/issue<N>` と `issue-<N>-<worker-id>`。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
@@ -105,7 +111,7 @@ RootはAGENTS.mdからorchestrate Skillを自動適用し、独立した複数�
 Rootが上記手順で2割当を直列準備し、既存稼働割当との重複も照合した後:
 
 ```bash
-LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
+LAUNCH_TASK_ID=issue-51-52 bash .agents/scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
 bash tests/test-pair.sh
 ```
 

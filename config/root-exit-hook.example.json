@@ -1,0 +1,16 @@
+{
+  "description": "Inactive example: replace every placeholder, review and trust explicitly before use.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B /ABSOLUTE/REPO/.agents/scripts/root-exit-check.py --hook --task /EXTERNAL/STATE/task.json --task-id TASK_ID --session-id ROOT_SESSION_ID --parent-pane-id ROOT_PANE_ID --cwd /ABSOLUTE/REPO --summary-home /EXTERNAL/RUN_SUMMARIES --continuation-state /EXTERNAL/STATE/continuation.json",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
