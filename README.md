@@ -191,3 +191,8 @@ raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが�
 ### 未解決の公開防止要件
 
 ローカルhookと公開前ラッパーは、送信資格情報を持つ同じ主体が無効化・省略できます。未導入clone、hook無効化、raw CLIによるPR/Issue投稿を含む未検査公開そのものを強制的に防ぐ要件は未解決であり、mergeの阻害要因として保持します。資格情報を分離したpublisherや受信側制御は未実装・未検証で、現在の実装をその代替と扱いません。これらの権限設計・設定変更には別途スコープの合意が必要です。
+
+
+## 隔離publisherの実装
+
+`scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureを追加しています。[実装した契約・起動手順・未完了の実環境切替](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていないため、この追加だけで未解決P1をresolveしません。
