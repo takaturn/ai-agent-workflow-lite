@@ -8,6 +8,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install namespace test dependency
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Isolated publisher (local receivers, no production credentials)
+        run: python3 tests/test-publisher.py
+      - name: Install pinned actual Gitleaks for publisher acceptance
+        run: |
+          mkdir -p "$RUNNER_TEMP/publisher-tools"
+          curl --fail --location --silent --show-error https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tgz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP/publisher-tools" gitleaks
+          echo "$RUNNER_TEMP/publisher-tools" >> "$GITHUB_PATH"
+      - name: Publisher actual Git and Gitleaks (local receiver)
+        run: python3 tests/test-publisher-real.py
+      - name: Native pre-push hook (local bare receivers, model-free)
+        run: python3 tests/test-gitleaks-hook.py
+      - name: Approved repository policy guard (local receivers, model-free)
+        run: python3 tests/test-policy-guard.py
+      - name: Publication gate (model-free scanner/dispatch fixtures)
+        run: python3 tests/test-publication-check.py
+      - name: Task launch reservations (model-free)
+        run: python3 tests/test-launch-gate.py
       - name: Mocked Herdr integration
         run: bash tests/test-runner.sh
       - name: Real Git worktree isolation

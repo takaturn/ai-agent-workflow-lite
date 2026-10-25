@@ -11,6 +11,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
 - `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
+- `scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
@@ -30,14 +31,36 @@ bash tests/test-runner.sh
 
 # デモ用タスクファイル。秘密情報は書かない。
 printf '%s\n' 'READMEの誤字を一箇所だけ修正し、差分を確認して報告する。' > /tmp/ai-work-demo.txt
+export LAUNCH_TASK_ID=issue-51-demo # 同じタスクの全worktree・再開で固定
+# 以下はユーザーの明示承認が既にある場合だけ実行する。
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
+  --approval-ref '<承認記録の参照>' --provider codex --model gpt-6-luna \
+  --additional-launches 1 --paths run-agent
 bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
 
+## タスク単位の起動ゲート（Issue #16）
+
+`LAUNCH_TASK_ID` は明示必須です。run名、Pane、worktree、再開に依存しない同じIDを同じ承認済みタスクの全実行で使ってください。別タスクとは重複しないIDにします。`XDG_STATE_HOME` も全worktreeで共通のGit管理外ディレクトリに固定します。policyと予約は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-gate/<task-id>/state.json` に保存され、ユーザー専用のlockで排他的に更新されます。単位は **予約された子CLI起動枠1回** です。Pane作成の前に枠を予約するため、Pane作成失敗も枠を消費します。
+
+`approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。`--approval-ref` はタスク内で一意な承認イベントIDとして扱います。同じ参照・同じ内容の再登録はno-opで、上限到達や明示停止も解除しません。同じ参照で内容を変更した再登録は拒否し、別途承認された追加枠には新しい参照を使います。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
+
+```bash
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
+# ユーザーが停止を明示したとき:
+python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
+python3 tests/test-launch-gate.py
+```
+
+各予約は `reserved` から `returned` / `failed` / `interrupted` / `prelaunch_error` に更新されます。強制終了などで `reserved` のままでも消費済みとして数え、自動返却や自動retryはしません。上限到達と明示停止は `stop.reason=limit_reached|explicit_stop` として残し、#15が参照できます。追加承認は上限到達だけを解除し、明示停止を解除しません。この停止状態は新規起動の拒否であり、稼働中の子を停止した証拠ではありません。子の所有者、実効停止能力、停止結果は別途確認してください。`LAUNCH_PATH` による経路の自己申告は受け付けません。使用量と単価は `unknown` のままであり、請求確定額や絶対的な課金上限を保証しません。
+
+対象はこの `run-agent.sh` のCodex/Claude起動と、これを使う `run-pair.sh` です。後者では両worktreeで同じ `LAUNCH_TASK_ID` と `XDG_STATE_HOME` を渡し、policyに共通の `run-agent` 経路を許可してください。直接の `codex` / `claude` / `herdr agent start`、他のrunner、Root自身の推論、稼働中エージェントへの追加promptはこのゲートを通りません。policy/stateの手動編集や異なるstate homeの利用も防げないため、Rootが実際の割当とIDを照合します。モデルなしテストは予約動作の確認であり、実機AI起動や請求の検証ではありません。
+
 ## 開始・結果回収・受入・片付け
 
-開始前に `run_id`・親Pane・agent名・cwd・summaryパスを出力し、Pane作成後は子IDも記録します。タスクは一度読み込んだ送信対象テキスト（Shellの末尾改行正規化後）のSHA-256で識別し、本文を保存しません。外部summaryの `phase` は最後に確認した段階（initialized / pane_created / agent_ready / prompt_wait / result_collected）、`status` はrunning / returned / failedです。prompt_waitは呼出し中であり、投入成功の証明ではありません。各checkpointは一時ファイルから置換しますが、強制終了後にプロセスがまだ生きているかは実Paneを再確認します。
+開始前に `run_id`・親Pane・agent名・cwd・summaryパスを出力し、Pane作成後は子IDも記録します。タスクは一度読み込んだ送信対象テキスト（Shellの末尾改行正規化後）のSHA-256で識別し、本文を保存しません。外部summaryの `phase` は最後に確認した段階（initialized / pane_created / agent_ready / prompt_wait / result_collected）、`status` はrunning / returned / failed / interrupted / prelaunch_errorです。prompt_waitは呼出し中であり、投入成功の証明ではありません。各checkpointは一時ファイルから置換しますが、強制終了後にプロセスがまだ生きているかは実Paneを再確認します。
 
 結果回収後も `root_acceptance=pending`・`cleanup=retained` のままです。Rootが成果・focused testsを独立確認してから、返されたsummaryと短い検証メモで明示的に受け入れます。
 
@@ -82,7 +105,7 @@ RootはAGENTS.mdからorchestrate Skillを自動適用し、独立した複数�
 Rootが上記手順で2割当を直列準備し、既存稼働割当との重複も照合した後:
 
 ```bash
-bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
+LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
 bash tests/test-pair.sh
 ```
 
@@ -124,3 +147,68 @@ bash tests/test-worktree.sh
 3つの現実的なタスクで、単独エージェントと比較し **完了時間・利用者の介入・トークン消費（取得可能な場合）・正確さ・Paneによる進捗確認の容易さ** を確認します。トークン値を取得できなければ `unavailable` とし、節約できたと主張しません。
 
 新しい仕組みを増やす前に、ユーザーにとっての改善を測定します。
+
+
+## Gitの送信前hook
+
+Git公式の [pre-push仕様](https://git-scm.com/docs/githooks#_pre_push) に従い、通常の `git push` から自動実行するhookを導入します。Gitが渡す送信ref/OIDを使うため、Rootが範囲を手入力する必要はありません。Git公式はhook仕様を定め、秘密検出には別途Gitleaksを使用しています。
+
+```bash
+python3 scripts/install-gitleaks-hook.py
+python3 tests/test-gitleaks-hook.py
+```
+
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkなどの場合は上書きしません。同じコピーなら再実行はno-opです。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+
+新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
+
+Gitleaksは組み込みルールを明示して使用し、repo/env設定やignoreコメントでの抑制を受け付けません。scanner不在・検出・異常・timeoutはpush失敗とし、候補値・生の診断出力・認証情報を含む可能性のあるremote URLは表示しません。テストは使い捨てのローカルbare repositoryで実際のpushを行い、拒否時に受信refが変わらないことを確認します。実Gitleaksによる検証とは区別します。
+
+これはローカルhookです。`--no-verify` や設定変更による無効化はGitの機能として可能であり、サーバー側の強制ではありません。CIだけでは公開前の防止になりません。PR/Issue本文・コメントはGitを通らないため、次節の公開前ゲートとRootの文脈確認が引き続き必要です。自動検出0件で機密情報全般の不在は保証しません。
+
+## 外部公開前チェック
+
+`publication-check.py` は外部書込み前の協調的な運用ゲートです。Gitleaksが必要です。Rootは自動検査に先立ち、個人情報・顧客/社内情報・内部URL/パス・LLM会話やログの引用などを文脈確認します。`--context-reviewed` はその申告であり、内容の安全性を自動証明しません。
+
+例えば、投稿本文をファイルに固定し、対象と実行コマンドを明示します（既に投稿承認がある場合だけ実行）。`prepare` が出力した記録パスを同じ対象の `publish` へ渡します。
+
+```bash
+python3 scripts/publication-check.py prepare --target owner/repo:pr:19 \
+  --file /tmp/pr-body.md --context-reviewed -- \
+  gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
+python3 scripts/publication-check.py publish --target owner/repo:pr:19 \
+  --file /tmp/pr-body.md --receipt /absolute/path/printed-by-prepare.json -- \
+  gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
+```
+
+pushは同様に `--git-range origin/main..HEAD` と送信する正確なrefspecを指定します。全送信commit・途中で削除した内容・commit message・merge固有差分を検査します。整形ログに現れない追加ヘッダー/mergetagもraw commit objectとして検査し、OIDと内容ハッシュを検査記録へ含めます。rangeは両端をcommitへ解決した `base..head` 形式だけを受け付けます。binary patch、NULを含むファイル、UTF-8でない入力は対応外として公開を停止します。画像・アーカイブなどは専用の内容確認手順が必要です。複数ref、tag、添付物などは全対象を明示して確認できる場合に限ります。`--file` は複数指定できます。target文字列はRootが実送信先と一致を確認します。secretをcommand引数に含めず、認証は既存の安全な設定を使ってください。
+
+未検査・scanner失敗/不在・候補検出・本文/commit範囲/command/cwd/target変更・既使用記録は拒否します。直前に自動再検査し、送信要求の前に記録を使用済みにします。失敗した送信を再試行する場合も新しい検査記録が必要です。記録は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/publication-check/` に対象ファイルのパスとハッシュ、commit範囲のハッシュ、commandのハッシュ、時刻、文脈確認申告だけを保存します。秘密の候補値・本文・scanner生出力は保存しません。
+
+raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが入力を変更する競合、外部サービス側で生成されるログは自動保護しません。対象を固定し、単一Rootで操作し、送信後に実対象を読み戻します。自動検出0件を「秘匿情報なし」の保証にしません。モデルなしの動作検証は `python3 tests/test-publication-check.py` です。
+
+
+### 公開対策の受入範囲と残るリスク
+
+ユーザーと合意した今回の到達点は、repo管理・AGENTS.mdの禁止ルール・hookによる誤操作防止です。同じ主体による意図的な無効化、未導入clone、raw API投稿などを技術的に排除する保証はありません。この残存リスクを受容した範囲で受入を判断し、Root全面隔離や迂回不能を達成したとは扱いません。post-push CIを公開前防止の代わりにしません。
+
+`config/publication-policy.json` は保護対象を列挙します。ユーザー承認済みの正確なcommitを記録してからnative hookを導入します。
+
+```sh
+python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
+python3 scripts/install-gitleaks-hook.py
+python3 tests/test-policy-guard.py
+```
+
+`approve` は明示承認の申告で、認証ではありません。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。承認記録とguardのコピーはcommon Git directoryでlinked worktree間に共有します。installerは承認を発行しません。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
+
+native pre-pushは送信する全commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規refは全履歴を確認するため、過去の未承認snapshotがあれば公開を停止して人が確認します。通常ファイルの変更には追加承認不要です。
+
+`.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
+
+Codexのproject hookは信頼済みprojectで `/hooks` から定義を確認・trustして初めて動きます。設定ファイルの配置だけでは有効と報告しません。エラー/timeoutがCodex側でfail-openになる可能性もあり、native pre-pushの拒否確認とCodex実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
+
+
+## 隔離publisherの実装
+
+`scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureは検討過程のプロトタイプとして残しています。[実装した契約・未検証範囲](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていません。今回の受入や通常の公開手順にpublisherの配備・Root切替は要求せず、拡張もしません。

@@ -61,7 +61,7 @@ exit "$rc"
         for file in root.glob('*.ended'):
             file.unlink()
         (root / 'events').write_text('')
-        env = dict(os.environ, ORDER_DIR=str(root), START_FIRST=start, FINISH_FIRST=finish, FAIL_SIDE=failure, **extra)
+        env = dict(os.environ, LAUNCH_TASK_ID="pair-order-fixture", ORDER_DIR=str(root), START_FIRST=start, FINISH_FIRST=finish, FAIL_SIDE=failure, **extra)
         process = subprocess.run(command, env=env, text=True, capture_output=True, timeout=10)
         return process, (root / 'events').read_text().splitlines()
     cases = list(itertools.product('ab', 'ab', ('none', 'a', 'b', 'both')))
