@@ -84,6 +84,15 @@ def main():
         if len(sys.argv) != 3:
             raise ValueError('not a Git pre-push invocation')
         lines = sys.stdin.read().splitlines()
+        common = Path(git('rev-parse', '--git-common-dir').decode().strip())
+        state = common/'workflow-policy-approvals.json'
+        if state.exists() or Path('config/publication-policy.json').exists():
+            guard = common/'hooks/workflow-policy-guard.py'
+            result = subprocess.run([sys.executable, str(guard), 'pre-push'],
+                input='\n'.join(lines)+'\n', text=True, capture_output=True, timeout=60)
+            if result.returncode:
+                print('pre-push: unapproved policy change or policy guard failure; push blocked', file=sys.stderr)
+                return 2
         index = git('ls-files', '--stage', '-z')
         if any(entry.startswith(b'160000 ') for entry in index.split(b'\x00')):
             raise UnsupportedSubmodule()

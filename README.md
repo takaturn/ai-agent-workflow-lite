@@ -188,11 +188,27 @@ pushは同様に `--git-range origin/main..HEAD` と送信する正確なrefspec
 raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが入力を変更する競合、外部サービス側で生成されるログは自動保護しません。対象を固定し、単一Rootで操作し、送信後に実対象を読み戻します。自動検出0件を「秘匿情報なし」の保証にしません。モデルなしの動作検証は `python3 tests/test-publication-check.py` です。
 
 
-### 未解決の公開防止要件
+### 公開対策の受入範囲と残るリスク
 
-ローカルhookと公開前ラッパーは、送信資格情報を持つ同じ主体が無効化・省略できます。未導入clone、hook無効化、raw CLIによるPR/Issue投稿を含む未検査公開そのものを強制的に防ぐ要件は未解決であり、mergeの阻害要因として保持します。資格情報を分離したpublisherや受信側制御は未実装・未検証で、現在の実装をその代替と扱いません。これらの権限設計・設定変更には別途スコープの合意が必要です。
+ユーザーと合意した今回の到達点は、repo管理・AGENTS.mdの禁止ルール・hookによる誤操作防止です。同じ主体による意図的な無効化、未導入clone、raw API投稿などを技術的に排除する保証はありません。この残存リスクを受容した範囲で受入を判断し、Root全面隔離や迂回不能を達成したとは扱いません。post-push CIを公開前防止の代わりにしません。
+
+`config/publication-policy.json` は保護対象を列挙します。ユーザー承認済みの正確なcommitを記録してからnative hookを導入します。
+
+```sh
+python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
+python3 scripts/install-gitleaks-hook.py
+python3 tests/test-policy-guard.py
+```
+
+`approve` は明示承認の申告で、認証ではありません。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。承認記録とguardのコピーはcommon Git directoryでlinked worktree間に共有します。installerは承認を発行しません。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
+
+native pre-pushは送信する全commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規refは全履歴を確認するため、過去の未承認snapshotがあれば公開を停止して人が確認します。通常ファイルの変更には追加承認不要です。
+
+`.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
+
+Codexのproject hookは信頼済みprojectで `/hooks` から定義を確認・trustして初めて動きます。設定ファイルの配置だけでは有効と報告しません。エラー/timeoutがCodex側でfail-openになる可能性もあり、native pre-pushの拒否確認とCodex実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
 
 
 ## 隔離publisherの実装
 
-`scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureを追加しています。[実装した契約・起動手順・未完了の実環境切替](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていないため、この追加だけで未解決P1をresolveしません。
+`scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureは検討過程のプロトタイプとして残しています。[実装した契約・未検証範囲](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていません。今回の受入や通常の公開手順にpublisherの配備・Root切替は要求せず、拡張もしません。

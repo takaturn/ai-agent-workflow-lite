@@ -13,6 +13,11 @@ def main():
                                     capture_output=True)
         if configured.returncode != 1:
             raise ValueError('existing hook configuration or Git error')
+        common = Path(subprocess.check_output(['git', 'rev-parse', '--git-common-dir'],
+                      stderr=subprocess.PIPE).decode().strip())
+        if (common/'workflow-policy-approvals.json').exists() or Path('config/publication-policy.json').exists():
+            subprocess.run([sys.executable, str(common/'hooks/workflow-policy-guard.py'), 'check'],
+                           check=True, capture_output=True, timeout=10)
         hook = Path(subprocess.check_output(['git', 'rev-parse', '--git-path',
                     'hooks/pre-push'], stderr=subprocess.PIPE).decode().strip()).absolute()
         source = Path(__file__).resolve().with_name('pre-push-gitleaks.py').read_bytes()

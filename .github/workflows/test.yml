@@ -23,6 +23,8 @@ jobs:
         run: python3 tests/test-publisher-real.py
       - name: Native pre-push hook (local bare receivers, model-free)
         run: python3 tests/test-gitleaks-hook.py
+      - name: Approved repository policy guard (local receivers, model-free)
+        run: python3 tests/test-policy-guard.py
       - name: Publication gate (model-free scanner/dispatch fixtures)
         run: python3 tests/test-publication-check.py
       - name: Task launch reservations (model-free)

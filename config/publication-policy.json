@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "protected_paths": [
+    "AGENTS.md",
+    ".codex",
+    "config/publication-policy.json",
+    "scripts/policy-guard.py",
+    "scripts/install-gitleaks-hook.py",
+    "scripts/pre-push-gitleaks.py",
+    "scripts/publication-check.py"
+  ]
+}
