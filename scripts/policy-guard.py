@@ -155,7 +155,7 @@ def main():
                     try:
                         base = git('rev-parse', '--verify', old+'^{commit}').decode().strip()
                     except subprocess.CalledProcessError:base = None
-                    for commit in git('rev-list', base+'..'+head if base else head, '--').decode().splitlines():
+                    for commit in git('rev-list', head, *(['^'+base] if base else ['--not', '--remotes']), '--').decode().splitlines():
                         check(value, commit)
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):

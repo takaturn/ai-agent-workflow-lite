@@ -118,6 +118,17 @@ class PolicyGuardTest(unittest.TestCase):
         self.commit_all('drop skills')
         self.assertNotEqual(self.guard('approve','--approval-ref','fixture-drop-skills').returncode,0)
 
+    def test_new_branch_skips_history_already_on_remote(self):
+        self.seed()
+        (self.work/'AGENTS.md').write_text('Published before approval reset\n');self.commit_all('published')
+        self.assertEqual(self.git('push','--no-verify','origin','HEAD:refs/heads/main').returncode,0)
+        self.assertEqual(self.git('fetch','-q','origin').returncode,0)
+        (self.work/'AGENTS.md').write_text('Approved fixture rules\n');self.commit_all('restore')
+        self.assertEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+        (self.work/'AGENTS.md').write_text('Unapproved\n');self.commit_all('unapproved')
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature2').returncode,0)
+        self.assertIsNone(self.remote_oid('refs/heads/feature2'))
+
     def test_linked_worktree_shares_approvals(self):
         other=self.root/'linked'
         self.assertEqual(self.git('worktree','add','-qb','other',str(other)).returncode,0)
