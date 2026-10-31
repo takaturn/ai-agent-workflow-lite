@@ -7,12 +7,14 @@ review launch, merge or execution authority.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 DIMENSIONS = ("impact", "scope", "uncertainty", "verification", "recovery")
 GATES = ("AUTH", "SECRETS", "EXECUTION", "DESTRUCTIVE", "SECURITY_GATE", "AUTONOMOUS_EFFECT", "MANDATED_REVIEW")
 STATUSES = ("yes", "no", "unknown")
+DIFF = re.compile(r"[0-9a-f]{7,40}\.\.(?:[0-9a-f]{7,40}|WORKTREE)")
 
 
 class InvalidAssessment(ValueError):
@@ -38,7 +40,8 @@ def _no_duplicates(pairs):
 
 def decide(data: dict) -> dict:
     _exact_keys(data, ("diff", "dimensions", "gates"), "assessment")
-    _evidence(data["diff"], "diff")
+    if not isinstance(data["diff"], str) or not DIFF.fullmatch(data["diff"]):
+        raise InvalidAssessment("diff must be <base-sha>..<head-sha> or <base-sha>..WORKTREE")
     _exact_keys(data["dimensions"], DIMENSIONS, "dimensions")
     _exact_keys(data["gates"], GATES, "gates")
 
@@ -90,8 +93,9 @@ def decide(data: dict) -> dict:
         "uncertain_gates": uncertain_gates,
         "unknown_dimensions": unresolved,
         "reason": reason,
-        # Only an existing repository rule can require an independent Reviewer; FULL alone does not.
-        "independent_review_required": statuses["MANDATED_REVIEW"] != "no",
+        # Mirrors AGENTS.md: existing mandates and high-impact decisions need an independent Reviewer.
+        "independent_review_required": bool(triggered or uncertain_gates)
+        or routing["impact"] == 2 or routing["recovery"] == 2,
         "merge_approval": "NOT_GRANTED",
         "next_step": ("Resolve missing facts once; if still unavailable, stop automatic retries and report the blocker"
                       if provisional else "Perform the selected review; this is not merge approval"),
@@ -106,7 +110,7 @@ def main():
         text = Path(sys.argv[1]).read_text(encoding="utf-8")
         assessment = json.loads(text, object_pairs_hook=_no_duplicates)
         print(json.dumps(decide(assessment), ensure_ascii=False, indent=2))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         print(f"invalid assessment: {exc}", file=sys.stderr)
         return 2
     return 0

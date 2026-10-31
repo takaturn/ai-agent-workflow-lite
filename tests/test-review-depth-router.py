@@ -25,7 +25,7 @@ def assessment(scores=None, gates=None):
     scores = scores or {}
     gates = gates or {}
     return {
-        "diff": "origin/main...HEAD",
+        "diff": "ffeb006..77c0001",
         "dimensions": {name: {"score": scores.get(name, 0), "evidence": "fixture evidence"} for name in DIMENSIONS},
         "gates": {name: {"status": gates.get(name, "no"), "evidence": "fixture evidence"} for name in GATES},
     }
@@ -81,10 +81,17 @@ class BoundaryTest(unittest.TestCase):
             self.assertEqual((result["mode"], result["state"], result["uncertain_gates"]),
                              ("FULL", "PROVISIONAL", [name]))
 
-    def test_mandated_review_alone_requires_independent_review(self):
-        self.assertTrue(route(gates={"MANDATED_REVIEW": "yes"})["independent_review_required"])
-        self.assertTrue(route(gates={"MANDATED_REVIEW": "unknown"})["independent_review_required"])
-        self.assertFalse(route(gates={"AUTH": "yes"})["independent_review_required"])
+    def test_independent_review_required_for_gates_and_high_impact(self):
+        for name in GATES:
+            for status in ("yes", "unknown"):
+                self.assertTrue(route(gates={name: status})["independent_review_required"], (name, status))
+        for name in ("impact", "recovery"):
+            self.assertTrue(route({name: 2})["independent_review_required"], name)
+            self.assertTrue(route({name: None})["independent_review_required"], name)
+
+    def test_independent_review_not_required_without_gate_or_high_impact(self):
+        for scores in ({}, {"uncertainty": 2}, {"scope": 2, "uncertainty": 2, "verification": 2}, {"scope": None}):
+            self.assertFalse(route(scores)["independent_review_required"], scores)
 
     def test_null_is_conservative_two_and_provisional(self):
         result = route({"scope": None})
@@ -106,10 +113,18 @@ class MonotonicityTest(unittest.TestCase):
                     mode = route(dict(zip(DIMENSIONS, raised)))["mode"]
                     self.assertGreaterEqual(RANK[mode], RANK[base], (combo, index, higher))
 
-    def test_gate_never_lowers_mode(self):
-        for combo in itertools.product((0, 1, 2), repeat=len(DIMENSIONS)):
-            for status in ("yes", "unknown"):
-                self.assertEqual(route(dict(zip(DIMENSIONS, combo)), {"AUTH": status})["mode"], "FULL")
+    def test_any_gate_forces_full_for_every_combination(self):
+        for combo in itertools.product((0, 1, 2, None), repeat=len(DIMENSIONS)):
+            for name in GATES:
+                for status in ("yes", "unknown"):
+                    result = route(dict(zip(DIMENSIONS, combo)), {name: status})
+                    self.assertEqual(result["mode"], "FULL", (combo, name, status))
+                    self.assertTrue(result["independent_review_required"])
+
+    def test_verification_null_combinations(self):
+        self.assertEqual(route({"verification": None})["mode"], "FOCUSED")
+        self.assertEqual(route({"verification": None, "uncertainty": 2})["mode"], "FULL")
+        self.assertEqual(route({"verification": None, "scope": None})["mode"], "FULL")
 
 
 class AdversarialCaseTest(unittest.TestCase):
@@ -125,6 +140,7 @@ class AdversarialCaseTest(unittest.TestCase):
         "tests-only addition": ({"verification": 0}, {}, "NORMAL"),
         "irreversible external side effect": ({"recovery": 2}, {}, "FULL"),
         "unknown callers of shared function": ({"impact": 1, "scope": None}, {}, "FOCUSED"),
+        "code enforcing Writer limit raised": ({"impact": 1, "scope": 1, "uncertainty": 1}, {"MANDATED_REVIEW": "yes"}, "FULL"),
         "cannot tell if authorization changed": ({}, {"AUTH": "unknown"}, "FULL"),
     }
 
@@ -154,7 +170,16 @@ class InvalidInputTest(unittest.TestCase):
         for section, name in (("dimensions", "impact"), ("gates", "AUTH")):
             data = assessment(); data[section][name]["evidence"] = "  "; self.rejects(data)
             data = assessment(); del data[section][name]["evidence"]; self.rejects(data)
-        data = assessment(); data["diff"] = ""; self.rejects(data)
+        for bad in (5, None):
+            data = assessment(); data["dimensions"]["impact"]["evidence"] = bad; self.rejects(data)
+        data = assessment(); del data["diff"]; self.rejects(data)
+
+    def test_diff_must_be_pinned_range(self):
+        for good in ("ffeb006..77c0001", "ffeb0065695a4868c9e5778435d0593a1dd5639c..WORKTREE"):
+            data = assessment(); data["diff"] = good
+            decide_module.decide(data)
+        for bad in ("", "origin/main...HEAD", "main..HEAD", "ffeb006...77c0001", "abc..def", 7):
+            data = assessment(); data["diff"] = bad; self.rejects(data)
 
     def test_bad_score_and_status_values(self):
         for bad in (3, -1, 1.0, True, "1"):
@@ -166,6 +191,16 @@ class InvalidInputTest(unittest.TestCase):
         data = assessment({"scope": None, "uncertainty": 2}, {"SECRETS": "unknown"})
         first = decide_module.decide(copy.deepcopy(data))
         self.assertEqual(first, decide_module.decide(copy.deepcopy(data)))
+
+
+class RubricDriftTest(unittest.TestCase):
+    def test_rubric_names_every_dimension_and_gate(self):
+        rubric = (SCRIPT.parents[1] / "references/rubric.md").read_text(encoding="utf-8")
+        for name in DIMENSIONS + GATES:
+            self.assertIn(f"`{name}`", rubric, name)
+            self.assertIn(f'"{name}"', rubric, name)
+        for clause in ("Total ≥ 6", "total ≥ 3 or any single 2", "impact=2 or recovery=2"):
+            self.assertIn(clause, rubric)
 
 
 class CliTest(unittest.TestCase):
@@ -191,6 +226,18 @@ class CliTest(unittest.TestCase):
         result = self.run_cli(text)
         self.assertEqual(result.returncode, 2)
         self.assertIn("duplicate", result.stderr)
+
+    def test_full_result_via_cli(self):
+        result = self.run_cli(json.dumps(assessment(gates={"EXECUTION": "yes"})))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual((output["mode"], output["independent_review_required"]), ("FULL", True))
+
+    def test_missing_file_and_deep_nesting_exit_two(self):
+        result = subprocess.run(["python3", str(SCRIPT), "/nonexistent/assessment.json"], text=True, capture_output=True)
+        self.assertEqual((result.returncode, result.stdout), (2, ""))
+        result = self.run_cli("[" * 100000 + "]" * 100000)
+        self.assertEqual((result.returncode, result.stdout), (2, ""))
 
     def test_usage(self):
         result = subprocess.run(["python3", str(SCRIPT)], text=True, capture_output=True)
