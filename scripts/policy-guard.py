@@ -250,6 +250,11 @@ def main():
                 startup = Path.cwd().resolve()
                 if not isinstance(event.get('cwd'), str) or not Path(event['cwd']).is_absolute() or Path(event['cwd']).resolve() != Path(event['cwd']) or not Path(event['cwd']).is_dir():
                     raise ValueError('invalid event cwd')
+                if args.policy_root is None and args.expected_common_dir is None:
+                    args.policy_root = git('rev-parse', '--show-toplevel').decode().strip()
+                    args.expected_common_dir = git(
+                        'rev-parse', '--path-format=absolute',
+                        '--git-common-dir').decode().strip()
                 if not args.policy_root or not args.expected_common_dir:
                     raise ValueError('explicit policy binding required')
                 root = Path(args.policy_root)

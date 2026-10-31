@@ -65,9 +65,15 @@ class PolicyGuardTest(unittest.TestCase):
         result=self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',str(self.work.parent),input=event)
         self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
 
-    def test_missing_binding_is_denied(self):
-        event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(self.work)})
-        self.assertEqual(json.loads(self.guard('hook',input=event).stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+    def test_legacy_hook_checks_current_worktree_policy(self):
+        event = json.dumps({
+            'hook_event_name': 'PreToolUse', 'cwd': str(self.work)})
+        self.assertEqual(self.guard('hook', input=event).stdout, '')
+        (self.work/'AGENTS.md').write_text('Unapproved legacy change\n')
+        result = self.guard('hook', input=event)
+        self.assertEqual(
+            json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],
+            'deny')
 
     def test_linked_worktree_cannot_reuse_original_binding(self):
         linked=self.work.parent/'linked'
