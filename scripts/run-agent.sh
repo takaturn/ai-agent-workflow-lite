@@ -26,6 +26,14 @@ config="$script_dir/../config/models.json"
 model="$(jq -er --arg p "$profile" --arg t "$tier" '.profiles[$p][$t].model // empty' "$config")" || die 'no model configured'
 effort="$(jq -er --arg p "$profile" --arg t "$tier" '.profiles[$p][$t].effort // ""' "$config")" || die 'model policy invalid'
 task="$(cat -- "$task_file")"
+claude_review_version=2.1.314
+if [[ $profile == claude && $role == review ]]; then
+  # Denials were verified on this exact version (Issue #24); re-verify before changing it.
+  # Checked before any reservation or pane so a mismatch consumes nothing.
+  claude_version="$(claude --version 2>/dev/null)" || die 'claude --version failed'
+  [[ ${claude_version%% *} == "$claude_review_version" ]] \
+    || die "Claude Reader/Reviewer verified only on $claude_review_version; re-verify denials first"
+fi
 
 # Resolve and reject in-repository state BEFORE creating any directories.
 state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -137,7 +145,11 @@ else
       'Bash(git status)' 'Bash(git status --short)' 'Bash(git diff)' 'Bash(git diff --stat)'
       'Bash(git log --oneline -10)')
   else
-    args+=(--permission-mode plan --safe-mode)
+    # Reader/Reviewer: only Read/Glob/Grep exist, so no write, shell or network tool can be called.
+    # --restricted ignores settings-file allow rules and confines Read to the worktree.
+    # --tools is variadic: keep it last.
+    args+=(--permission-mode dontAsk --safe-mode --restricted --strict-mcp-config
+      --tools 'Read' 'Glob' 'Grep')
   fi
   herdr agent start "$agent_name" --kind claude --pane "$child_pane" \
     --timeout 120000 -- "${args[@]}" || die 'Claude start failed; inspect pane'
@@ -150,7 +162,9 @@ if [[ "$profile" == claude && "$role" == implement ]]; then
   shell_note="
 Shell is limited to single commands matching: bash tests/*, python3 tests/*, and exactly: git status [--short], git diff [--stat], git log --oneline -10. Do not chain with && ; | or \$(...). A denial affects only that command; still run the allowed checks."
 fi
-instructions="$task
+# Fixed first line: Claude's interactive input runs a leading ! as a shell command and / as a slash command.
+instructions="Task from Root:
+$task
 $shell_note
 Stay within approved repository scope. Respect CLI and OS permissions; never circumvent denials or run destructive commands without approval. Do not spawn more agents. Finish with:
 result: done | blocked | needs-review
