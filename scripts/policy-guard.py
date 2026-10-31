@@ -41,7 +41,7 @@ def paths_read(value):
     for name in paths:
         if not isinstance(name, str) or not name or Path(name).is_absolute() or any(p in ('..', '.') for p in name.split('/')):
             raise ValueError('invalid protected path')
-    if POLICY not in paths or 'scripts/policy-guard.py' not in paths or 'AGENTS.md' not in paths or '.codex' not in paths:
+    if POLICY not in paths or 'scripts/policy-guard.py' not in paths or 'AGENTS.md' not in paths or '.codex' not in paths or '.claude/settings.json' not in paths or '.agents/skills' not in paths:
         raise ValueError('guard must protect its configuration')
     return paths
 
@@ -129,10 +129,21 @@ def approve(reference):
         if load() != value:raise ValueError('approval read-back failed')
 
 
+def known_history(remote, location):
+    """Exclude only history fetched from the verified push destination; otherwise check everything."""
+    if not remote or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', remote) or remote not in git('remote').decode().split():
+        return []
+    if location not in git('remote', 'get-url', '--push', '--all', remote).decode().splitlines():
+        return []
+    return ['--not', '--remotes='+remote]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['approve', 'check', 'hook', 'pre-push'])
     parser.add_argument('--approval-ref')
+    parser.add_argument('--remote-name')
+    parser.add_argument('--remote-location')
     args = parser.parse_args()
     try:
         if args.mode == 'approve':
@@ -155,7 +166,7 @@ def main():
                     try:
                         base = git('rev-parse', '--verify', old+'^{commit}').decode().strip()
                     except subprocess.CalledProcessError:base = None
-                    for commit in git('rev-list', base+'..'+head if base else head, '--').decode().splitlines():
+                    for commit in git('rev-list', head, *(['^'+base] if base else known_history(args.remote_name, args.remote_location)), '--').decode().splitlines():
                         check(value, commit)
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
