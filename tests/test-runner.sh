@@ -51,6 +51,11 @@ case "$1 $2" in
 esac
 MOCK
 chmod +x "$tmp/bin/herdr"
+cat >"$tmp/bin/claude" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s (Claude Code)\n' "${TEST_CLAUDE_VERSION:-2.1.314}"
+MOCK
+chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" TEST_ROOT="$tmp/work" XDG_STATE_HOME="$tmp/state"
 export HERDR_ENV=1 HERDR_PANE_ID=parent
 export LAUNCH_TASK_ID=runner-fixture
@@ -258,17 +263,34 @@ fi
 if grep -Eqx -- '--safe-mode|acceptEdits|bypassPermissions|auto|Bash|Bash\(\*\)' "$tmp/claude-writer-args"; then
   echo 'FAIL: claude writer has safe-mode or broad permissions' >&2; exit 1
 fi
-# Claude Reviewer stays in plan + safe-mode.
+# Claude Reviewer gets only read tools.
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-review-args" \
   bash "$base/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
 args=$(sed -n '/^--$/,$p' "$tmp/claude-review-args" | tail -n +2 | tr '\n' ' ')
-[[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode plan --safe-mode ' ]] \
+[[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode dontAsk --safe-mode --restricted --strict-mcp-config --tools Read Glob Grep ' ]] \
   || { echo "FAIL: claude review args: $args" >&2; exit 1; }
 # The pre-rename profile name is rejected, not aliased.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" \
   bash "$base/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >/dev/null 2>&1); then
   echo 'FAIL: claude-only profile accepted' >&2; exit 1
 fi
+# An unverified Claude version must not launch a Reader/Reviewer.
+claude_policy "$tmp/claude-v"
+if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-v" TEST_CLAUDE_VERSION=2.1.315 TEST_ACTIONS="$tmp/claude-v-actions" \
+  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>"$tmp/claude-v-err"); then
+  echo 'FAIL: unverified claude version launched a reviewer' >&2; exit 1
+fi
+grep -q 'verified only on 2.1.314' "$tmp/claude-v-err" || { echo 'FAIL: version gate not the cause' >&2; exit 1; }
+! grep -Eq '^(pane split|agent start)' "$tmp/claude-v-actions" 2>/dev/null \
+  || { echo 'FAIL: pane or agent created on unverified version' >&2; exit 1; }
+jq -e '.reservations == []' "$tmp/claude-v"/ai-agent-workflow-lite/launch-gate/*/state.json >/dev/null \
+  || { echo 'FAIL: reservation consumed on unverified version' >&2; exit 1; }
+# A task starting with ! or / must not reach the interactive input first.
+printf '%s\n' '! touch x' >"$tmp/bang.txt"
+claude_policy "$tmp/claude-b"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-b" TEST_CAPTURE_PROMPT="$tmp/bang-prompt" \
+  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/bang.txt" >/dev/null 2>&1)
+[[ $(head -n1 "$tmp/bang-prompt") == 'Task from Root:' ]] || { echo 'FAIL: prompt not prefixed' >&2; exit 1; }
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
