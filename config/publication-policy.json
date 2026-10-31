@@ -3,6 +3,8 @@
   "protected_paths": [
     "AGENTS.md",
     ".codex",
+    ".claude/settings.json",
+    ".agents/skills",
     "config/publication-policy.json",
     "scripts/policy-guard.py",
     "scripts/install-gitleaks-hook.py",

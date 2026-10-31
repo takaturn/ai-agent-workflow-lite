@@ -41,7 +41,7 @@ def paths_read(value):
     for name in paths:
         if not isinstance(name, str) or not name or Path(name).is_absolute() or any(p in ('..', '.') for p in name.split('/')):
             raise ValueError('invalid protected path')
-    if POLICY not in paths or 'scripts/policy-guard.py' not in paths or 'AGENTS.md' not in paths or '.codex' not in paths:
+    if POLICY not in paths or 'scripts/policy-guard.py' not in paths or 'AGENTS.md' not in paths or '.codex' not in paths or '.claude/settings.json' not in paths or '.agents/skills' not in paths:
         raise ValueError('guard must protect its configuration')
     return paths
 

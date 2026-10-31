@@ -88,6 +88,36 @@ class PolicyGuardTest(unittest.TestCase):
         (self.work/'AGENTS.md').unlink();(self.work/'AGENTS.md').symlink_to(self.work/'data')
         self.assertEqual(json.loads(self.hook().stdout)['hookSpecificOutput']['permissionDecision'],'deny')
 
+    def test_claude_settings_change_requires_approval(self):
+        (self.work/'.claude').mkdir()
+        (self.work/'.claude/settings.json').write_text('{}\n')
+        self.assertEqual(json.loads(self.hook().stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        self.commit_all('claude settings')
+        self.assertEqual(self.guard('approve','--approval-ref','fixture-claude').returncode,0)
+        self.assertEqual(self.hook().stdout,'')
+        (self.work/'.claude/skills').mkdir()
+        (self.work/'.claude/skills/linked').symlink_to('../../scripts')
+        self.assertEqual(self.hook().stdout,'')
+
+    def test_policy_must_protect_claude_settings(self):
+        policy=json.loads((self.work/'config/publication-policy.json').read_text())
+        policy['protected_paths'].remove('.claude/settings.json')
+        (self.work/'config/publication-policy.json').write_text(json.dumps(policy))
+        self.commit_all('drop claude')
+        self.assertNotEqual(self.guard('approve','--approval-ref','fixture-drop').returncode,0)
+
+    def test_skill_change_requires_approval(self):
+        (self.work/'.agents/skills/sample').mkdir(parents=True)
+        (self.work/'.agents/skills/sample/SKILL.md').write_text('changed\n')
+        self.assertEqual(json.loads(self.hook().stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_policy_must_protect_skills(self):
+        policy=json.loads((self.work/'config/publication-policy.json').read_text())
+        policy['protected_paths'].remove('.agents/skills')
+        (self.work/'config/publication-policy.json').write_text(json.dumps(policy))
+        self.commit_all('drop skills')
+        self.assertNotEqual(self.guard('approve','--approval-ref','fixture-drop-skills').returncode,0)
+
     def test_linked_worktree_shares_approvals(self):
         other=self.root/'linked'
         self.assertEqual(self.git('worktree','add','-qb','other',str(other)).returncode,0)
