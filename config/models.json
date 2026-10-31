@@ -17,13 +17,16 @@
     },
     "claude-only": {
       "light": {
-        "model": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+        "model": "claude-haiku-5-5",
+        "effort": "low"
       },
       "standard": {
-        "model": "jp.anthropic.claude-sonnet-4-6"
+        "model": "claude-sonnet-5-5",
+        "effort": "medium"
       },
       "deep": {
-        "model": "global.anthropic.claude-opus-4-6-v1"
+        "model": "claude-opus-5-5",
+        "effort": "high"
       }
     }
   }

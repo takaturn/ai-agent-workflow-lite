@@ -33,6 +33,7 @@ case "$1 $2" in
     printf '%s\n' '{"result":{"pane":{"pane_id":"child"}}}' ;;
   'agent start')
     inspect_phase pane_created
+    [[ -z ${TEST_CAPTURE_START:-} ]] || printf '%s\n' "$@" >"$TEST_CAPTURE_START"
     exit "${TEST_START_EXIT:-0}" ;;
   'agent prompt')
     inspect_phase prompt_wait
@@ -59,6 +60,15 @@ fixture_policy() {
     --worktree "$tmp/work" \
     approve --approval-ref fixture-only --provider codex --model gpt-6-luna \
     --additional-launches 100 --paths run-agent >/dev/null
+}
+claude_policy() {
+  local model
+  for model in claude-haiku-5-5 claude-sonnet-5-5; do
+    XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+      --worktree "$tmp/work" \
+      approve --approval-ref "fixture-$model" --provider claude-only --model "$model" \
+      --additional-launches 10 --paths run-agent >/dev/null
+  done
 }
 for state_dir in "$tmp/state" "$tmp/lifecycle" "$tmp/mutated" \
   "$tmp/checkpoint-initialized" "$tmp/checkpoint-pane_created" \
@@ -229,6 +239,31 @@ done <"$tmp/interrupted-error"
 jq -e '.status=="interrupted" and .phase=="prompt_wait"' "$summary_path" >/dev/null
 reservation=$(jq -r '.reservation_id' "$summary_path")
 jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="interrupted"' "$ledger" >/dev/null
+
+# Claude Writer: model/effort from config, no prompt wait, AGENTS.md loaded.
+claude_policy "$tmp/claude"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-writer-args" TEST_CAPTURE_PROMPT="$tmp/claude-prompt" \
+  bash "$base/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >"$tmp/claude-output" 2>/dev/null)
+grep -q '^result: done' "$tmp/claude-output"
+args=$(sed -n '/^--$/,$p' "$tmp/claude-writer-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--model claude-haiku-5-5 --effort low --permission-mode dontAsk --allowedTools '* ]] \
+  || { echo "FAIL: claude writer args: $args" >&2; exit 1; }
+expected_tools='Read,Glob,Grep,Edit,Write,Bash(bash tests/*),Bash(python3 tests/*),Bash(git status),Bash(git status --short),Bash(git diff),Bash(git diff --stat),Bash(git log --oneline -10)'
+[[ $(sed -n '/^--allowedTools$/,$p' "$tmp/claude-writer-args" | tail -n +2 | paste -sd,) == "$expected_tools" ]] \
+  || { echo 'FAIL: claude writer allowlist is not the exact expected set' >&2; exit 1; }
+grep -q '^Shell is limited to single commands' "$tmp/claude-prompt"
+if grep -q 'Shell is limited' "$tmp/captured-prompt"; then
+  echo 'FAIL: codex prompt has claude shell note' >&2; exit 1
+fi
+if grep -Eqx -- '--safe-mode|acceptEdits|bypassPermissions|auto|Bash|Bash\(\*\)' "$tmp/claude-writer-args"; then
+  echo 'FAIL: claude writer has safe-mode or broad permissions' >&2; exit 1
+fi
+# Claude Reviewer stays in plan + safe-mode.
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-review-args" \
+  bash "$base/scripts/run-agent.sh" review claude-only standard "$tmp/task.txt" >/dev/null 2>&1)
+args=$(sed -n '/^--$/,$p' "$tmp/claude-review-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode plan --safe-mode ' ]] \
+  || { echo "FAIL: claude review args: $args" >&2; exit 1; }
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
