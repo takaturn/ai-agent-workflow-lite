@@ -213,9 +213,25 @@ def approve(reference):
         if load() != value:raise ValueError('approval read-back failed')
 
 
+def verify_context(context, root, common):
+    probe = subprocess.run(['git', '-C', context, 'rev-parse',
+        '--path-format=absolute', '--git-common-dir'], capture_output=True,
+        text=True, timeout=10, env=dict(os.environ, LC_ALL='C'))
+    if probe.returncode == 0:
+        if Path(probe.stdout.strip()).resolve() == common:
+            actual = Path(git('-C', context, 'rev-parse',
+                '--show-toplevel').decode().strip()).resolve()
+            if actual != root:
+                raise ValueError('hook binding belongs to another worktree')
+    elif 'not a git repository' not in probe.stderr:
+        raise ValueError('cannot identify operation repository')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['approve', 'bootstrap', 'check', 'hook', 'pre-push'])
+    parser.add_argument('--policy-root')
+    parser.add_argument('--expected-common-dir')
     parser.add_argument('--approval-ref')
     parser.add_argument('--remote-name')
     parser.add_argument('--remote-location')
@@ -231,7 +247,23 @@ def main():
             if args.mode == 'hook':
                 event = json.load(sys.stdin)
                 if not isinstance(event, dict) or event.get('hook_event_name') != 'PreToolUse':raise ValueError('invalid event')
-                os.chdir(event['cwd'])
+                startup = Path.cwd().resolve()
+                if not isinstance(event.get('cwd'), str) or not Path(event['cwd']).is_absolute() or Path(event['cwd']).resolve() != Path(event['cwd']) or not Path(event['cwd']).is_dir():
+                    raise ValueError('invalid event cwd')
+                if not args.policy_root or not args.expected_common_dir:
+                    raise ValueError('explicit policy binding required')
+                root = Path(args.policy_root)
+                common = Path(args.expected_common_dir)
+                if not root.is_absolute() or root.resolve() != root or not common.is_absolute() or common.resolve() != common:
+                    raise ValueError('canonical binding required')
+                os.chdir(root)
+                if Path(git('rev-parse', '--show-toplevel').decode().strip()).resolve() != root:
+                    raise ValueError('policy root mismatch')
+                if locations()[0].parent != common:
+                    raise ValueError('common directory mismatch')
+                for context in (str(startup), event['cwd']):
+                    verify_context(context, root, common)
+
             value = load()
             check(value)
             if args.mode == 'pre-push':

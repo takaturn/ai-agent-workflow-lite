@@ -16,6 +16,14 @@ The purpose is productive development, **not** a new orchestration framework. Ro
 5. Follow the README's role policy: at most two isolated Writers and at most one Reader or Reviewer combined (three child agents total, excluding Root). Launch a Reader only for useful independent investigation; use a Reviewer for independent evaluation of changes. Root owns deterministic Shell/CI checks. Delegation never expands the already authorized task scope.
 6. Assess review need by behavioral impact, not file extension. Changes to launch routing, authority boundaries, role assignment, concurrency limits, evidence acceptance or cleanup require independent adversarial review before declaring completion, even when only README/Skill text changes. For other changes, briefly record why independent review is needed or omitted. Shell tests do not prove policy consistency. After findings, continue authorized corrections, focused checks, re-review and successful-pane cleanup without waiting for another user prompt; stop only at a real approval boundary or blocker and report it. Do not substitute an apology or plan for the next authorized action.
 
+## Before preparing an assignment
+
+Trace the relevant execution path from entry point to the affected state before choosing a fix or delegation boundary. Identify which inputs select the caller, repository, worktree and authority, and which merely name an operation target. Validate the causal hypothesis against the actual launcher and downstream checks; a passing helper test does not establish that the real invocation uses the same inputs.
+
+For changes that cross these boundaries, include the relevant alternate invocation contexts and rejection cases in the initial acceptance criteria. Ask the Reviewer to challenge the cause and approach as well as the diff. Do not turn each late discovery into a separately scoped review while leaving the original execution path unchecked.
+
+Before ending Root's turn, reconcile authorized remaining work and collected results. Continue executable work. If a user answer is required, state the exact requested action and the rule requiring it; otherwise do not describe the task as waiting for the user. A blocked publication or deployment does not by itself block diagnosis or preparation.
+
 ## Delegate with Herdr
 
 First validate the actual current pane:

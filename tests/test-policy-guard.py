@@ -52,10 +52,77 @@ class PolicyGuardTest(unittest.TestCase):
     def hook(self, **event):
         payload={'hook_event_name':'PreToolUse','cwd':str(self.work),'tool_name':'Bash','tool_input':{'command':'git status'}}
         payload.update(event)
-        return self.guard('hook',input=json.dumps(payload))
+        common=self.git('rev-parse','--path-format=absolute','--git-common-dir').stdout.strip()
+        return self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',common,input=json.dumps(payload),cwd=event.get('cwd',str(self.work)))
+
+    def test_explicit_binding_from_non_git_directory(self):
+        other=self.work.parent/'non-git'
+        other.mkdir()
+        self.assertEqual(self.hook(cwd=str(other)).stdout,'')
+
+    def test_wrong_common_directory_is_denied(self):
+        event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(self.work)})
+        result=self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',str(self.work.parent),input=event)
+        self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_missing_binding_is_denied(self):
+        event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(self.work)})
+        self.assertEqual(json.loads(self.guard('hook',input=event).stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_linked_worktree_cannot_reuse_original_binding(self):
+        linked=self.work.parent/'linked'
+        self.assertEqual(self.git('worktree','add','-q','-b','linked',str(linked)).returncode,0)
+        (linked/'AGENTS.md').write_text('Unapproved linked change\n')
+        self.assertEqual(json.loads(self.hook(cwd=str(linked)).stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        common=self.git('rev-parse','--path-format=absolute','--git-common-dir').stdout.strip()
+        event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(linked)})
+        result=self.guard('hook','--policy-root',str(linked),'--expected-common-dir',common,input=event,cwd=linked)
+        self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        (linked/'AGENTS.md').write_bytes((self.work/'AGENTS.md').read_bytes())
+        result=self.guard('hook','--policy-root',str(linked),'--expected-common-dir',common,input=event,cwd=linked)
+        self.assertEqual(result.stdout,'',result.stdout)
+
+    def test_hook_startup_and_operation_directory_matrix(self):
+        wiki=self.work.parent/'wiki-matrix'; wiki.mkdir()
+        self.assertEqual(self.process(['git','init','-q',str(wiki)]).returncode,0)
+        plain=self.work.parent/'plain-matrix';plain.mkdir()
+        common=self.git('rev-parse','--path-format=absolute','--git-common-dir').stdout.strip()
+        for changed in (False, True):
+            if changed:(self.work/'AGENTS.md').write_text('Unapproved matrix change\n')
+            for startup in (self.work,wiki,plain):
+                for operation in (self.work,wiki,plain):
+                    event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(operation)})
+                    result=self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',common,input=event,cwd=startup)
+                    with self.subTest(changed=changed,startup=startup.name,operation=operation.name):
+                        if changed:self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+                        else:self.assertEqual(result.stdout,'',result.stdout)
+
+    def test_linked_startup_with_external_operation_is_denied(self):
+        linked=self.work.parent/'linked-startup'
+        self.assertEqual(self.git('worktree','add','-q','-b','linked-startup',str(linked)).returncode,0)
+        (linked/'AGENTS.md').write_text('Unapproved linked startup\n')
+        outside=self.work.parent/'outside';outside.mkdir()
+        common=self.git('rev-parse','--path-format=absolute','--git-common-dir').stdout.strip()
+        for operation in (outside,self.work):
+            result=self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',common,input=json.dumps({'hook_event_name':'PreToolUse','cwd':str(operation)}),cwd=linked)
+            self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_relative_event_directory_is_denied(self):
+        self.assertEqual(json.loads(self.hook(cwd='.').stdout)['hookSpecificOutput']['permissionDecision'],'deny')
 
     def seed(self):
         self.assertEqual(self.push().returncode,0)
+
+    def test_hook_keeps_policy_root_when_command_targets_wiki(self):
+        wiki = self.work.parent/'wiki'
+        wiki.mkdir()
+        self.assertEqual(self.process(['git','init','-q',str(wiki)]).returncode,0)
+        result = self.hook(cwd=str(wiki))
+        self.assertEqual(result.stdout, '', result.stdout)
+        # A different command directory must never hide a policy change.
+        (self.work/'AGENTS.md').write_text('Unapproved change\n')
+        blocked = json.loads(self.hook(cwd=str(wiki)).stdout)
+        self.assertEqual(blocked['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_policy_change_requires_approval_before_push(self):
         self.seed();before=self.remote_oid()

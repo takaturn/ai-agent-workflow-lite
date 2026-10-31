@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --git-common-dir)/hooks/workflow-policy-guard.py\" hook",
+            "command": "timeout --kill-after=1s 5s sh -c 'if root=$(git rev-parse --show-toplevel) && common=$(git rev-parse --path-format=absolute --git-common-dir); then /usr/bin/python3 \"$common/hooks/workflow-policy-guard.py\" hook --policy-root \"$root\" --expected-common-dir \"$common\" || printf '\"'\"'%s\\n'\"'\"' '\"'\"'{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Policy hook could not resolve or verify the session repository\"}}'\"'\"'; else printf '\"'\"'%s\\n'\"'\"' '\"'\"'{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Policy hook could not resolve or verify the session repository\"}}'\"'\"'; fi' || printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Policy verification failed or exceeded its time limit\"}}'",
             "timeout": 10,
             "statusMessage": "Checking approved repository policy"
           }
