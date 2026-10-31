@@ -6,9 +6,12 @@ import itertools
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
+# Bytecode caches under .agents/skills would break the policy-guard snapshot.
+sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).resolve().parents[1] / ".agents/skills/review-depth-router/scripts/decide.py"
 spec = importlib.util.spec_from_file_location("decide", SCRIPT)
 decide_module = importlib.util.module_from_spec(spec)
