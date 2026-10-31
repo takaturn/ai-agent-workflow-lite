@@ -133,6 +133,16 @@ class HookTest(unittest.TestCase):
         self.assertNotEqual(self.install().returncode,0)
         self.assertFalse(hook.exists())
 
+    def test_symlinked_hooks_directory_is_rejected(self):
+        hooks=self.work/'.git/hooks'
+        original=self.work/'.git/original-hooks'
+        hooks.rename(original)
+        external=self.root/'external-hooks'
+        external.mkdir()
+        hooks.symlink_to(external, target_is_directory=True)
+        self.assertNotEqual(self.install().returncode,0)
+        self.assertFalse((external/'pre-push').exists())
+
     def test_merge_only_content_blocks(self):
         self.write_commit('first','first')
         first=self.git('rev-parse','HEAD').stdout.strip()

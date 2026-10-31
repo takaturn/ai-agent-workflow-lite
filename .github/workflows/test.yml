@@ -40,4 +40,7 @@ jobs:
       - name: Root acceptance and cleanup gates (mocked Herdr)
         run: python3 tests/test-finish-agent.py
       - name: Bash syntax
-        run: bash -n scripts/*.sh tests/*.sh
+        run: |
+          for script in .agents/scripts/*.sh tests/*.sh; do
+            bash -n "$script"
+          done

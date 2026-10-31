@@ -11,13 +11,13 @@ one="$tmp/issue-4-worker-a"
 two="$tmp/issue-5-worker-b"
 git -C "$repo" worktree add -qb feature/issue4 "$one"
 git -C "$repo" worktree add -qb feature/issue5 "$two"
-check() { (cd "$repo" && bash "$base/scripts/check-worker-worktree.sh" "$@"); }
+check() { (cd "$repo" && bash "$base/.agents/scripts/check-worker-worktree.sh" "$@"); }
 check worker-a 4 "$one" >"$tmp/assignment"
 test "$(cat "$tmp/assignment")" = "worker-a$(printf '\t')4$(printf '\t')feature/issue4$(printf '\t')$one"
 printf 'PASS: unique assignment\n'
 # A linked caller shares the common Git directory, even via a symlink.
 ln -s "$one" "$tmp/caller-alias"
-(cd "$tmp/caller-alias" && bash "$base/scripts/check-worker-worktree.sh" worker-b 5 "$two")
+(cd "$tmp/caller-alias" && bash "$base/.agents/scripts/check-worker-worktree.sh" worker-b 5 "$two")
 reject() {
   if check "$@" >"$tmp/rejected" 2>&1; then
     printf 'FAIL: invalid assignment accepted\n' >&2; exit 1
@@ -40,7 +40,7 @@ foreign="$tmp/foreign/issue-4-worker-a"
 git -C "$other" worktree add -qb feature/issue4 "$foreign"
 reject worker-a 4 "$foreign"
 grep -Fx 'worktree check: target belongs to a different repository' "$tmp/rejected"
-if (cd "$tmp" && bash "$base/scripts/check-worker-worktree.sh" worker-a 4 "$one") >"$tmp/rejected" 2>&1; then
+if (cd "$tmp" && bash "$base/.agents/scripts/check-worker-worktree.sh" worker-a 4 "$one") >"$tmp/rejected" 2>&1; then
   printf 'FAIL: non-repository caller accepted\n' >&2; exit 1
 fi
 grep -Fx 'worktree check: caller is not a Git repository' "$tmp/rejected"
