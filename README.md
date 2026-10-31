@@ -19,7 +19,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 
 **前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。
 
-単独 Worker の実測結果は [Issue #3 の GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-3-Herdr-Single-Worker-E2E) を参照してください。[Issue #5 の公開記録](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-5-Two-Worker-Autonomous-Acceptance)にはCodex light 2体の別worktree・別Paneでの同時working、個別成果検証、pair runnerのexit 0、ターン中断の分離、完了後の追加指示、および同じRootでの判断4ケースの受入演習を記録しています。初回のタスク指示不足と訂正も記録し、CLI成功と成果成功を区別しています。新規Rootの盲検評価・反復安定性・Claude Codeは未検証です。
+単独 Worker の実測結果は [Issue #3 の GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-3-Herdr-Single-Worker-E2E) を参照してください。[Issue #5 の公開記録](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-5-Two-Worker-Autonomous-Acceptance)にはCodex light 2体の別worktree・別Paneでの同時working、個別成果検証、pair runnerのexit 0、ターン中断の分離、完了後の追加指示、および同じRootでの判断4ケースの受入演習を記録しています。初回のタスク指示不足と訂正も記録し、CLI成功と成果成功を区別しています。新規Rootの盲検評価・反復安定性は未検証です。Claude Code（`claude-only`）はIssue #23で、light/standardのWriter単体起動とrun-pairでの2 Worker同時実行を、使い捨てrepositoryで1回ずつ実機確認しました。
 
 ## 使い方
 
@@ -130,7 +130,7 @@ bash tests/test-worktree.sh
 3. Herdr の存在を環境変数だけでは判定しない。実際の pane と layout を検証し、確認できなければ**明示的に停止**する。無断の代替ランタイム起動はしない。
 4. 最大2 Writer、1 worktreeに1 Writer。ReaderとReviewerは合計最大1体を初期上限とし、子エージェント全体は最大3体（Rootを除く）。これはRootの割当規約であり、runnerの自動上限制御ではない。ReaderはWriter枠には数えないが、無制限には増やさない。自動リトライ・再帰委譲は非対応。失敗時に原因が確認できるよう Pane は残す。
 5. 出力を大量に再読しない。サブエージェントは最後に短い作業結果を返す。
-6. 役割と権限を分ける。**Writer**は承認済み範囲を専用worktreeで編集する。**Reader**はコード読解・依存/仕様調査・原因候補の整理を行い、**Reviewer**は変更の妥当性・リスクを独立評価する。Reader/Reviewerは初回・追加指示とも編集・commit/push・外部状態変更・子起動は禁止で、指摘を得てもWriterへ自動昇格しない。修正とファイル生成が必要なテストはRoot/Writerが担当する。Codexはread-only指定、Claudeのplan/safe-modeは同等の隔離保証ではないため、実効制限を確認できない環境ではClaude Reader/Reviewerを起動しない。読取コマンドの暗黙cache生成も確認対象とし、拒否を権限変更で回避しない。
+6. 役割と権限を分ける。**Writer**は承認済み範囲を専用worktreeで編集する。**Reader**はコード読解・依存/仕様調査・原因候補の整理を行い、**Reviewer**は変更の妥当性・リスクを独立評価する。Reader/Reviewerは初回・追加指示とも編集・commit/push・外部状態変更・子起動は禁止で、指摘を得てもWriterへ自動昇格しない。修正とファイル生成が必要なテストはRoot/Writerが担当する。Claude Writerは `--permission-mode dontAsk` と `--allowedTools`（Read/Glob/Grep/Edit/Write、`bash tests/*`・`python3 tests/*`、`git status`/`git diff`/`git log` は固定形のみ）で起動する。許可外の操作は許可待ちにならずに拒否される。これは許可待ちを避けるための設定で、隔離境界ではない（Writerが書いた `tests/` 内のスクリプトは実行できる）。CLAUDE.md/AGENTS.mdを読ませるため `--safe-mode` は付けない。ユーザー/プロジェクト設定（対象repoの `.claude/settings*.json` を含む）の許可ルールとhooksは追加で適用されるため、Rootは起動前に確認する。未信頼フォルダでは起動時の信頼確認で停止するため、Rootは信頼済みの場所で起動する。Codexはread-only指定、Claudeのplan/safe-modeは同等の隔離保証ではないため、実効制限を確認できない環境ではClaude Reader/Reviewerを起動しない。読取コマンドの暗黙cache生成も確認対象とし、拒否を権限変更で回避しない。
 7. Readerは独立した調査がRootの負担を減らす場合だけ起動する。軽微な検索・決定論的チェックはRootが直接行う。専用Herdr Paneを与えるが、変更しないため別worktreeは必須ではない。固定commitの根拠はSHAとpath:line、変更中のツリーの根拠はlive表記・観測時刻・内容hashで分け、未コミット行をSHAの内容として報告しない。確認済み事実・仮説・未確認を分け、Rootが採用前に根拠を再照合する。起動直前・再開時には既存Pane/agentと全タスク割当を照合し、残存Reader/Reviewerも枠に数える。所有者・役割・全割当を確認できなければ新規起動を止める。並行する複数Rootによる無調整起動は非対応。具体的手順は [orchestrate Skill](.agents/skills/orchestrate/SKILL.md) を参照する。
 
 ## 記録の配置

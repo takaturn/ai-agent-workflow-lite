@@ -124,17 +124,34 @@ if [[ "$profile" == codex ]]; then
     --timeout 120000 -- "${args[@]}" || die 'Codex start failed; inspect pane'
 else
   launch_attempted=1
-  permission_mode=plan
-  [[ "$role" == implement ]] && permission_mode=acceptEdits
+  args=(--model "$model")
+  [[ -z "$effort" ]] || args+=(--effort "$effort")
+  if [[ "$role" == implement ]]; then
+    # dontAsk denies anything outside the allowlist instead of waiting for a prompt.
+    # No --safe-mode: the Writer must load CLAUDE.md/AGENTS.md rules.
+    # Avoids prompts only; tests/* can run Writer-authored code, so this is not isolation.
+    # Exact git forms block --output/difftool variants. --allowedTools is variadic: keep it last.
+    args+=(--permission-mode dontAsk --allowedTools
+      'Read' 'Glob' 'Grep' 'Edit' 'Write'
+      'Bash(bash tests/*)' 'Bash(python3 tests/*)'
+      'Bash(git status)' 'Bash(git status --short)' 'Bash(git diff)' 'Bash(git diff --stat)'
+      'Bash(git log --oneline -10)')
+  else
+    args+=(--permission-mode plan --safe-mode)
+  fi
   herdr agent start "$agent_name" --kind claude --pane "$child_pane" \
-    --timeout 120000 -- --model "$model" --permission-mode "$permission_mode" \
-    --safe-mode || die 'Claude start failed; inspect pane'
+    --timeout 120000 -- "${args[@]}" || die 'Claude start failed; inspect pane'
 fi
 phase=agent_ready
 checkpoint
 
+shell_note=
+if [[ "$profile" == claude-only && "$role" == implement ]]; then
+  shell_note="
+Shell is limited to single commands matching: bash tests/*, python3 tests/*, and exactly: git status [--short], git diff [--stat], git log --oneline -10. Do not chain with && ; | or \$(...). A denial affects only that command; still run the allowed checks."
+fi
 instructions="$task
-
+$shell_note
 Stay within approved repository scope. Respect CLI and OS permissions; never circumvent denials or run destructive commands without approval. Do not spawn more agents. Finish with:
 result: done | blocked | needs-review
 changed: short file list or none
