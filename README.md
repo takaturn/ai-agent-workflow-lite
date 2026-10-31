@@ -7,6 +7,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 ## v0 の範囲
 
 - `.agents/skills/orchestrate/SKILL.md`: Root が実装とレビューを必要に応じて委譲する
+- `.agents/skills/review-depth-router/SKILL.md`: Root が固定diffのレビュー深度（NORMAL/FOCUSED/FULL）を証拠つき採点で選ぶ。既存の独立レビュー必須条件を弱めず、起動・マージ権限は与えない
 - `scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
 - `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
 - `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
