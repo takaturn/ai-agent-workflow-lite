@@ -3,10 +3,10 @@ set -euo pipefail
 umask 077
 die() { printf 'run-agent: %s\n' "$1" >&2; exit 2; }
 
-[[ $# == 4 ]] || die 'usage: run-agent.sh <implement|review> <codex|claude-only> <light|standard|deep> <task-file>'
+[[ $# == 4 ]] || die 'usage: run-agent.sh <implement|review> <codex|claude> <light|standard|deep> <task-file>'
 role="$1"; profile="$2"; tier="$3"; task_file="$4"
 case "$role" in implement|review) ;; *) die 'invalid role' ;; esac
-case "$profile" in codex|claude-only) ;; *) die 'invalid profile' ;; esac
+case "$profile" in codex|claude) ;; *) die 'invalid profile' ;; esac
 case "$tier" in light|standard|deep) ;; *) die 'invalid tier' ;; esac
 [[ -f "$task_file" && -r "$task_file" ]] || die 'task file unreadable'
 [[ -s "$task_file" ]] || die 'task file empty'
@@ -146,7 +146,7 @@ phase=agent_ready
 checkpoint
 
 shell_note=
-if [[ "$profile" == claude-only && "$role" == implement ]]; then
+if [[ "$profile" == claude && "$role" == implement ]]; then
   shell_note="
 Shell is limited to single commands matching: bash tests/*, python3 tests/*, and exactly: git status [--short], git diff [--stat], git log --oneline -10. Do not chain with && ; | or \$(...). A denial affects only that command; still run the allowed checks."
 fi

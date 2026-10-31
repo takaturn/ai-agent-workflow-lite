@@ -2,7 +2,7 @@
 
 > 現在の合意範囲：repo管理＋AGENTS.md＋hookによる誤操作防止。以下は検討済みプロトタイプの記録で、Root切替・publisher拡張は今回の受入条件ではありません。権限分離が実現したという意味ではなく、意図的な迂回の残存リスクを受容した仕様変更です。
 
-この実装は、資格情報のない要求側プロセスと、公開操作を行う信頼側publisherを分けるプロトタイプです。`publisher-sandbox.py` は新しいプロセスを起動します。現在動いているCodexセッションや既存のhost tool/API connectorの権限を変更しません。コードを配置・テストしただけでPR #19のP1を解決済みにしないでください。
+この実装は、資格情報のない要求側プロセスと、公開操作を行う信頼側publisherを分けるプロトタイプです。`publisher-sandbox.py` は新しいプロセスを起動します。現在動いているRootエージェント（Claude Code/Codex）のセッションや既存のhost tool/API connectorの権限を変更しません。コードを配置・テストしただけでPR #19のP1を解決済みにしないでください。
 
 ## 実装した契約
 
@@ -81,7 +81,7 @@ python3 /absolute/protected-publisher/publisher-sandbox.py \
 
 現在のRootはホスト実行toolとGitHub認証経路を持つままです。新しい子shellの隔離成功で、現在のRootも隔離されたとは扱いません。このセッションの実行権限はrepo内のファイル変更だけでは置き換わりません。
 
-1. Root本体と全tool/API connectorの実行経路を、ホストの資格情報・サービス制御に届かない境界へ切り替える。追加のhost executor/ブラウザー等を残さない。現launcherはshell/requester用で、Codexの推論用接続・認証・全tool routerの移行は未実装/未検証。
+1. Root本体と全tool/API connectorの実行経路を、ホストの資格情報・サービス制御に届かない境界へ切り替える。追加のhost executor/ブラウザー等を残さない。現launcherはshell/requester用で、Root CLI（Claude Code/Codex）の推論用接続・認証・全tool routerの移行は未実装/未検証。
 2. publisher/issuerの固定code・policy・承認鍵・GitHub権限をRootから変更不能にする。管理者、運用停止、復旧担当を確定する。
 3. 未対応API操作を止めるか、個別契約と試験を追加する。Rootに直接の権限を戻す回避をしない。
 4. 実環境でRootの旧gh/SSH/別clone/継承経路の拒否とreceiver不変、publisher経由の肯定動作を確認する。
