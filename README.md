@@ -164,7 +164,7 @@ python3 scripts/install-gitleaks-hook.py
 python3 tests/test-gitleaks-hook.py
 ```
 
-installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。保護対象のhookを人の端末でcommit・再承認した後、既存hookが以前の承認済みcommit内のソースと完全一致するときだけ `python3 scripts/install-gitleaks-hook.py --upgrade-approved` で更新できます。更新時は協調的な排他lockと置換直前の再照合を行い、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。承認前・未知のhook・symlink・`core.hooksPath` 設定は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。保護対象のhookをcommitし、人の端末で再承認した後、既存hookが以前の承認済みcommit内のソースと完全一致するときだけ `python3 scripts/install-gitleaks-hook.py --upgrade-approved` で更新できます。更新時は協調的な排他lockと置換直前の再照合を行い、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。承認前・未知のhook・symlink・`core.hooksPath` 設定は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
 
 新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
 
@@ -179,10 +179,10 @@ Gitleaksは組み込みルールを明示して使用し、repo/env設定やigno
 例えば、投稿本文をファイルに固定し、対象と実行コマンドを明示します（既に投稿承認がある場合だけ実行）。`prepare` が出力した記録パスを同じ対象の `publish` へ渡します。
 
 ```bash
-python3 scripts/publication-check.py prepare --target owner/repo:pr:19 \
+python3 scripts/publication-check.py prepare --policy-root "$PWD" --target owner/repo:pr:19 \
   --file /tmp/pr-body.md --context-reviewed -- \
   gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
-python3 scripts/publication-check.py publish --target owner/repo:pr:19 \
+python3 scripts/publication-check.py publish --policy-root "$PWD" --target owner/repo:pr:19 \
   --file /tmp/pr-body.md --receipt /absolute/path/printed-by-prepare.json -- \
   gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
 ```
@@ -202,7 +202,7 @@ raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが�
 
 ```sh
 python3 scripts/install-gitleaks-hook.py
-# 以下は保護対象を変更し、人の端末でcommitした場合だけ実行する
+# 保護対象の正確なcommitを人が承認した後、人の端末で実行する（初回移行のcommitのみ人手）
 python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
 python3 scripts/install-gitleaks-hook.py --upgrade-approved
 python3 tests/test-policy-guard.py
@@ -212,7 +212,7 @@ python3 tests/test-policy-guard.py
 
 policy guardは送信commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規・既存refとも、登録済みの送信先remoteのbaseブランチから到達できないcommitを検査します。baseブランチに含まれるcommitは受入済みと扱い、base専用の人手承認記録は作りません。既定のbaseは `refs/remotes/<remote>/HEAD` です。`develop` などをbaseにする場合は `git -c workflow.baseBranch=develop push ...` と指定します。どのbranchを受入済みbaseとするかは利用者の運用判断で、Rootが公開前に確認します。guardは送信先のbase refが示すOIDと手元のremote-tracking refを照合し、不一致・欠落・無関係な履歴では停止します。この照合は別接続なので、push時の受信側状態を原子的に証明しません。Gitleaksのnative pre-push検査は新規refの全到達可能履歴を引き続き対象にします。各pushの公開前確認も省略しません。通常ファイルの変更には追加承認不要です。
 
-`.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
+`.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、未承認の保護対象変更を通知し、既存権限内のローカル修正・検証・commitを継続できます。承認記録破損・実効guard不一致・対象識別失敗は拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、AIが修正・検証・commitを担当でき、人が正確なcommitを確認・承認して再承認コマンドを実行します。公開ラッパーは明示policy rootの承認済みguardをprepare時と送信直前に検査し、未承認変更の公開を拒否します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
 
 Codexのproject hookは信頼済みprojectで `/hooks` から定義を確認・trustして初めて動きます。設定ファイルの配置だけでは有効と報告しません。エラー/timeoutがCodex側でfail-openになる可能性もあり、native pre-pushの拒否確認とCodex実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
 
@@ -220,3 +220,8 @@ Codexのproject hookは信頼済みprojectで `/hooks` から定義を確認・t
 ## 隔離publisherの実装
 
 `scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureは検討過程のプロトタイプとして残しています。[実装した契約・未検証範囲](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていません。今回の受入や通常の公開手順にpublisherの配備・Root切替は要求せず、拡張もしません。
+
+### 既存guardからの一度限りの移行
+旧実効guardは保護対象変更時にtoolを拒否するため、今回の候補の適用・検証・commit・正確なcommitへの再承認は人の端末で一度に実施する。旧guardを無効化・削除せず、再承認が新guardを配置した後に、AIのローカル更新が可能となる。旧hookコマンドの互換呼出しは維持する。移行前からAIがcommitできるとは主張しない。
+
+公開receiptはpolicy root・common directory・実効guard・承認state・現在の保護対象snapshotを固定する。承認やsnapshotが変わったら文脈確認とprepareからやり直す。Wiki公開のpolicy rootは作業を管理する本体を指定する。

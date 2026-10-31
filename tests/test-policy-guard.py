@@ -72,8 +72,8 @@ class PolicyGuardTest(unittest.TestCase):
         (self.work/'AGENTS.md').write_text('Unapproved legacy change\n')
         result = self.guard('hook', input=event)
         self.assertEqual(
-            json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],
-            'deny')
+            json.loads(result.stdout)['hookSpecificOutput'].get('permissionDecision'),
+            None)
 
     def test_linked_worktree_cannot_reuse_original_binding(self):
         linked=self.work.parent/'linked'
@@ -83,7 +83,7 @@ class PolicyGuardTest(unittest.TestCase):
         common=self.git('rev-parse','--path-format=absolute','--git-common-dir').stdout.strip()
         event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(linked)})
         result=self.guard('hook','--policy-root',str(linked),'--expected-common-dir',common,input=event,cwd=linked)
-        self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        self.assertIn('additionalContext',json.loads(result.stdout)['hookSpecificOutput'])
         (linked/'AGENTS.md').write_bytes((self.work/'AGENTS.md').read_bytes())
         result=self.guard('hook','--policy-root',str(linked),'--expected-common-dir',common,input=event,cwd=linked)
         self.assertEqual(result.stdout,'',result.stdout)
@@ -100,7 +100,7 @@ class PolicyGuardTest(unittest.TestCase):
                     event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(operation)})
                     result=self.guard('hook','--policy-root',str(self.work),'--expected-common-dir',common,input=event,cwd=startup)
                     with self.subTest(changed=changed,startup=startup.name,operation=operation.name):
-                        if changed:self.assertEqual(json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+                        if changed:self.assertIn('additionalContext',json.loads(result.stdout)['hookSpecificOutput'])
                         else:self.assertEqual(result.stdout,'',result.stdout)
 
     def test_linked_startup_with_external_operation_is_denied(self):
@@ -116,6 +116,29 @@ class PolicyGuardTest(unittest.TestCase):
     def test_relative_event_directory_is_denied(self):
         self.assertEqual(json.loads(self.hook(cwd='.').stdout)['hookSpecificOutput']['permissionDecision'],'deny')
 
+    def test_one_time_human_migration_then_ai_local_commit(self):
+        source=(self.work/'scripts/policy-guard.py').read_text()
+        start=source.index('            try:\n                check(value)')
+        end=source.index("            if args.mode == 'identity':",start)
+        legacy=source[:start]+'            check(value)\n'+source[end:]
+        (self.work/'scripts/policy-guard.py').write_text(legacy)
+        self.commit_all('legacy strict guard fixture')
+        self.assertEqual(self.guard('approve','--approval-ref','legacy-human').returncode,0)
+        installed=self.work/'.git/hooks/workflow-policy-guard.py'
+        event=json.dumps({'hook_event_name':'PreToolUse','cwd':str(self.work)})
+        (self.work/'scripts/policy-guard.py').write_text(source)
+        (self.work/'AGENTS.md').write_text('Migration policy change\n')
+        before=self.process([sys.executable,str(installed),'hook'],cwd=self.work,input=event)
+        self.assertTrue(before.stdout,before.stderr)
+        self.assertEqual(json.loads(before.stdout)['hookSpecificOutput']['permissionDecision'],'deny')
+        self.commit_all('one-time human migration commit')
+        self.assertEqual(self.guard('approve','--approval-ref','migration-human').returncode,0)
+        (self.work/'AGENTS.md').write_text('Next local update\n')
+        after=self.process([sys.executable,str(installed),'hook'],cwd=self.work,input=event)
+        self.assertIn('additionalContext',json.loads(after.stdout)['hookSpecificOutput'])
+        self.commit_all('AI local commit after migration')
+        self.assertNotEqual(self.guard('check').returncode,0)
+
     def seed(self):
         self.assertEqual(self.push().returncode,0)
 
@@ -128,13 +151,13 @@ class PolicyGuardTest(unittest.TestCase):
         # A different command directory must never hide a policy change.
         (self.work/'AGENTS.md').write_text('Unapproved change\n')
         blocked = json.loads(self.hook(cwd=str(wiki)).stdout)
-        self.assertEqual(blocked['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIn('additionalContext',blocked['hookSpecificOutput'])
 
     def test_policy_change_requires_approval_before_push(self):
         self.seed();before=self.remote_oid()
         (self.work/'AGENTS.md').write_text('Changed rules\n')
         blocked=json.loads(self.hook().stdout)
-        self.assertEqual(blocked['hookSpecificOutput']['permissionDecision'],'deny')
+        self.assertIn('additionalContext',blocked['hookSpecificOutput'])
         self.commit_all('policy update')
         result=self.push()
         self.assertNotEqual(result.returncode,0)

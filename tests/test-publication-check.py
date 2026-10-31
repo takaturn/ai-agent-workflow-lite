@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Model-free publication gate tests; all dispatches are local fixture commands."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,10 @@ GATE = Path(__file__).resolve().parents[1]/'scripts/publication-check.py'
 
 class PublicationTest(unittest.TestCase):
     def setUp(self):
+        spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[1]/'tests/test-policy-guard.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        self.policy = module.PolicyGuardTest(); self.policy.setUp()
+        self.addCleanup(self.policy.doCleanups)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -30,7 +35,7 @@ class PublicationTest(unittest.TestCase):
         self.command = [sys.executable, '-c', 'from pathlib import Path; import sys; Path(sys.argv[1]).write_text("sent")', str(self.marker)]
 
     def invoke(self, mode, *extra, command=None):
-        return subprocess.run([sys.executable, str(GATE), mode, '--target', 'fixture:local',
+        return subprocess.run([sys.executable, str(GATE), mode, '--policy-root', str(self.policy.work), '--target', 'fixture:local',
             '--file', str(self.body), *extra, '--', *(command or self.command)],
             env=self.env, cwd=self.root, capture_output=True, text=True)
 
@@ -39,6 +44,26 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('diagnostic', result.stdout+result.stderr)
         return result.stdout.strip()
+
+    def test_unapproved_policy_blocks_prepare_and_dispatch(self):
+        receipt = self.prepare()
+        (self.policy.work/'AGENTS.md').write_text('Unapproved change\n')
+        self.assertNotEqual(self.invoke('prepare','--context-reviewed').returncode,0)
+        self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
+        self.assertFalse(self.marker.exists())
+        self.policy.commit_all('local commit is not approval')
+        self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
+        self.assertFalse(self.marker.exists())
+
+    def test_new_approval_invalidates_old_receipt(self):
+        receipt=self.prepare()
+        (self.policy.work/'AGENTS.md').write_text('Human approved new policy\n')
+        self.policy.commit_all('new policy')
+        self.assertEqual(self.policy.guard('approve','--approval-ref','new-human-approval').returncode,0)
+        self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
+        self.assertFalse(self.marker.exists())
+        new_receipt=self.prepare()
+        self.assertEqual(self.invoke('publish','--receipt',new_receipt).returncode,0)
 
     def test_unreviewed_and_missing_receipt_block(self):
         self.assertNotEqual(self.invoke('prepare').returncode, 0)

@@ -97,9 +97,13 @@ def load():
     return value
 
 
+class PolicyChange(ValueError):
+    pass
+
+
 def check(value, revision=None):
     if snapshot(value['paths'], revision) not in {entry['snapshot'] for entry in value['approvals']}:
-        raise ValueError('policy change requires explicit approval')
+        raise PolicyChange('policy change requires explicit approval')
 
 
 def feature_base(remote, location, head):
@@ -229,7 +233,7 @@ def verify_context(context, root, common):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['approve', 'bootstrap', 'check', 'hook', 'pre-push'])
+    parser.add_argument('mode', choices=['approve', 'bootstrap', 'check', 'identity', 'hook', 'pre-push'])
     parser.add_argument('--policy-root')
     parser.add_argument('--expected-common-dir')
     parser.add_argument('--approval-ref')
@@ -270,7 +274,18 @@ def main():
                     verify_context(context, root, common)
 
             value = load()
-            check(value)
+            try:
+                check(value)
+            except PolicyChange:
+                if args.mode != 'hook':
+                    raise
+                print(json.dumps({'hookSpecificOutput': {
+                    'hookEventName': 'PreToolUse',
+                    'additionalContext': 'Protected policy changes are unapproved. Local inspection, tests and commits may continue under existing permissions. Publication and installed guard updates require human approval.'}}))
+                return 0
+            if args.mode == 'identity':
+                print(json.dumps({'snapshot': snapshot(value['paths']),
+                    'approvals': digest(locations()[0].read_bytes())}, sort_keys=True))
             if args.mode == 'pre-push':
                 if not args.remote_name or not args.remote_location:
                     raise ValueError('missing destination remote')
