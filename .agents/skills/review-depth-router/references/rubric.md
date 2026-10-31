@@ -1,4 +1,4 @@
-# Review depth rubric (version 1.2)
+# Review depth rubric (version 1.3)
 
 **Unit of assessment:** what the pinned diff changes compared with its base, including the execution paths it reaches. Use the **highest applicable** row in each dimension; never average. A score of 0 needs positive evidence that the harmless property holds, such as "only comment lines changed". "No issue seen" is not evidence. If a score depends on a fact you cannot establish, use `null`.
 
@@ -10,7 +10,7 @@
 |---|---|---|---|
 | `impact` | A plausible failure, with a named causal path, leads to unauthorized disclosure or action, loss or corruption of real durable data, or every run of a service or agent workflow failing with no documented workaround. | A plausible failure changes the results or availability of one bounded feature, script or subcommand. | Nothing changed affects runtime behavior or a consequential user/agent action (typo-only text, comments, cosmetic output, test additions that weaken no check). |
 | `scope` | Changes a named contract consumed across a process, service or repository boundary (CLI arguments or exit status relied on by CI or docs, `summary.json` or state format, schema, IPC), or a repository-wide agent rule. Cite the boundary. | Changes behavior reached from two or more entrypoints in one process, or an interface consumed by another component. Cite the callers. | The content is non-executable and relied on by no contract, or tracing the callers shows exactly one entrypoint and no changed outward contract. |
-| `uncertainty` | Introduces or changes shared mutable state, concurrency, retry/timeout/idempotency, a protocol between independently run components, or ordering between such components or around externally visible side effects. | Adds or changes branches, validation or error handling only, including their order inside one process before any side effect. | No changed control flow or state, or equivalence shown by the diff together with relevant passing tests. "Looks similar" does not qualify. |
+| `uncertainty` | Introduces or changes shared mutable state, concurrency, retry/timeout/idempotency, a protocol between independently run components, or ordering between such components or around externally visible side effects. | Adds or changes branches, validation or error handling only, including their order inside one process before any side effect. Instruction text that adds or alters a conditional decision (when to STOP, SKIP, launch or accept) is 1. | No changed control flow or state, or equivalence shown by the diff together with relevant passing tests. "Looks similar" does not qualify. Instruction text scores 0 only when no condition or decision changes. |
 | `verification` | No observed passing check is relevant to the changed behavior, relevant checks fail or are flaky, or the required checks cannot be run. | Passing checks exist but miss a significant changed boundary or failure path, or only manual checks cover it. | An observed passing check covers the changed behavior and its changed failure paths. A non-executable diff may be verified by Root's recorded inspection, unless it contains runnable commands, safety guidance (text telling a reader or agent to run, allow or skip something) or an agent rule. |
 | `recovery` | A failure can leave durable or external effects that reverting the source cannot undo (data deleted, message sent, secret leaked, external state changed). | Recovery needs a reversible migration, data cleanup or operator action. | Reverting code or config restores behavior completely. |
 
@@ -37,7 +37,7 @@ Each gate looks at **behavior changed by this diff**. A keyword in neutral text,
 
 ## Assessment JSON
 
-The script requires exactly these keys. `diff` must be `<base-sha>..<head-sha>` or `<base-sha>..WORKTREE`. Every `evidence` must be a non-empty string. Duplicate JSON keys are rejected, so a later value cannot silently override an earlier one.
+The script requires exactly these keys. `diff` must be `<base-sha>..<head-sha>` or `<base-sha>..WORKTREE`; the script cannot check that a `WORKTREE` target is still the reviewed one. Every `evidence` must be a non-empty string. Duplicate JSON keys are rejected, so a later value cannot silently override an earlier one.
 
 ```json
 {
