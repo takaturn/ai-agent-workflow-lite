@@ -15,7 +15,7 @@
         "effort": "high"
       }
     },
-    "claude-only": {
+    "claude": {
       "light": {
         "model": "claude-haiku-5-5",
         "effort": "low"

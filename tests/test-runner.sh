@@ -66,7 +66,7 @@ claude_policy() {
   for model in claude-haiku-5-5 claude-sonnet-5-5; do
     XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
       --worktree "$tmp/work" \
-      approve --approval-ref "fixture-$model" --provider claude-only --model "$model" \
+      approve --approval-ref "fixture-$model" --provider claude --model "$model" \
       --additional-launches 10 --paths run-agent >/dev/null
   done
 }
@@ -243,7 +243,7 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="in
 # Claude Writer: model/effort from config, no prompt wait, AGENTS.md loaded.
 claude_policy "$tmp/claude"
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-writer-args" TEST_CAPTURE_PROMPT="$tmp/claude-prompt" \
-  bash "$base/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >"$tmp/claude-output" 2>/dev/null)
+  bash "$base/scripts/run-agent.sh" implement claude light "$tmp/task.txt" >"$tmp/claude-output" 2>/dev/null)
 grep -q '^result: done' "$tmp/claude-output"
 args=$(sed -n '/^--$/,$p' "$tmp/claude-writer-args" | tail -n +2 | tr '\n' ' ')
 [[ $args == '--model claude-haiku-5-5 --effort low --permission-mode dontAsk --allowedTools '* ]] \
@@ -260,10 +260,15 @@ if grep -Eqx -- '--safe-mode|acceptEdits|bypassPermissions|auto|Bash|Bash\(\*\)'
 fi
 # Claude Reviewer stays in plan + safe-mode.
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-review-args" \
-  bash "$base/scripts/run-agent.sh" review claude-only standard "$tmp/task.txt" >/dev/null 2>&1)
+  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
 args=$(sed -n '/^--$/,$p' "$tmp/claude-review-args" | tail -n +2 | tr '\n' ' ')
 [[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode plan --safe-mode ' ]] \
   || { echo "FAIL: claude review args: $args" >&2; exit 1; }
+# The pre-rename profile name is rejected, not aliased.
+if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" \
+  bash "$base/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >/dev/null 2>&1); then
+  echo 'FAIL: claude-only profile accepted' >&2; exit 1
+fi
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \

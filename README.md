@@ -17,9 +17,9 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 
 `bash tests/test-runner.sh` の成功はモックテストの成功であり、Herdr 実機での Worker 起動・監視・結果回収の成功を意味しません。
 
-**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および選択した Codex または Claude Code が導入・認証済みであること。
+**前提:** Linux、Bash、Git、jq、sha256sum、Herdr CLI、および Claude Code（既定）が導入・認証済みであること。`codex` profileを使う場合だけ Codex も必要です。
 
-単独 Worker の実測結果は [Issue #3 の GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-3-Herdr-Single-Worker-E2E) を参照してください。[Issue #5 の公開記録](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-5-Two-Worker-Autonomous-Acceptance)にはCodex light 2体の別worktree・別Paneでの同時working、個別成果検証、pair runnerのexit 0、ターン中断の分離、完了後の追加指示、および同じRootでの判断4ケースの受入演習を記録しています。初回のタスク指示不足と訂正も記録し、CLI成功と成果成功を区別しています。新規Rootの盲検評価・反復安定性は未検証です。Claude Code（`claude-only`）はIssue #23で、light/standardのWriter単体起動とrun-pairでの2 Worker同時実行を、使い捨てrepositoryで1回ずつ実機確認しました。
+単独 Worker の実測結果は [Issue #3 の GitHub Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-3-Herdr-Single-Worker-E2E) を参照してください。[Issue #5 の公開記録](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-5-Two-Worker-Autonomous-Acceptance)にはCodex light 2体の別worktree・別Paneでの同時working、個別成果検証、pair runnerのexit 0、ターン中断の分離、完了後の追加指示、および同じRootでの判断4ケースの受入演習を記録しています。初回のタスク指示不足と訂正も記録し、CLI成功と成果成功を区別しています。新規Rootの盲検評価・反復安定性は未検証です。Claude Code（`claude`）はIssue #23で、light/standardのWriter単体起動とrun-pairでの2 Worker同時実行を、使い捨てrepositoryで1回ずつ実機確認しました。
 
 ## 使い方
 
@@ -34,12 +34,12 @@ printf '%s\n' 'READMEの誤字を一箇所だけ修正し、差分を確認し�
 export LAUNCH_TASK_ID=issue-51-demo # 同じタスクの全worktree・再開で固定
 # 以下はユーザーの明示承認が既にある場合だけ実行する。
 python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
-  --approval-ref '<承認記録の参照>' --provider codex --model gpt-6-luna \
+  --approval-ref '<承認記録の参照>' --provider claude --model claude-haiku-5-5 \
   --additional-launches 1 --paths run-agent
-bash scripts/run-agent.sh implement codex light /tmp/ai-work-demo.txt
+bash scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 ```
 
-`run-agent.sh` の引数は `<implement|review> <codex|claude-only> <light|standard|deep> <task-file>` です。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
+`run-agent.sh` の引数は `<implement|review> <codex|claude> <light|standard|deep> <task-file>` です。既定は `claude` で、`codex` は承認済みproviderとして選ぶ場合に残しています（旧名 `claude-only` は受け付けません）。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
 
 ## タスク単位の起動ゲート（Issue #16）
 
@@ -105,7 +105,7 @@ RootはAGENTS.mdからorchestrate Skillを自動適用し、独立した複数�
 Rootが上記手順で2割当を直列準備し、既存稼働割当との重複も照合した後:
 
 ```bash
-LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh codex worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
+LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh claude worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
 bash tests/test-pair.sh
 ```
 
@@ -204,9 +204,9 @@ python3 tests/test-policy-guard.py
 
 native pre-pushは送信する全commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規refは全履歴を確認するため、過去の未承認snapshotがあれば公開を停止して人が確認します。通常ファイルの変更には追加承認不要です。
 
-`.codex/hooks.json` のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
+`.claude/settings.json`（Claude Code）と `.codex/hooks.json`（Codex profile用に維持）のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
 
-Codexのproject hookは信頼済みprojectで `/hooks` から定義を確認・trustして初めて動きます。設定ファイルの配置だけでは有効と報告しません。エラー/timeoutがCodex側でfail-openになる可能性もあり、native pre-pushの拒否確認とCodex実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
+Claude Codeのproject hookは、workspaceを信頼したうえで `/hooks` で定義が読み込まれていることを確認して初めて有効と扱います。設定ファイルの配置だけでは有効と報告しません。`disableAllHooks` などのユーザー設定で無効化できる点はAGENTS.mdの受容済みリスクです。Codex profileを使う場合は、Codexの `/hooks` で定義を確認・trustします。エラー/timeoutがCLI側でfail-openになる可能性もあり、native pre-pushの拒否確認と各CLI実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
 
 
 ## 隔離publisherの実装

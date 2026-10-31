@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Execute a requester without host home/network/proc, exposing only publisher IPC.
-This launches a new process, not the current Codex session. Trusted operators must
+This launches a new process, not the current Root agent session (Claude Code or Codex). Trusted operators must
 launch all requesters through the protected copy; host processes remain privileged.
 """
 import argparse
