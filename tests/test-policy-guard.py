@@ -129,6 +129,18 @@ class PolicyGuardTest(unittest.TestCase):
         self.assertNotEqual(self.push('HEAD:refs/heads/feature2').returncode,0)
         self.assertIsNone(self.remote_oid('refs/heads/feature2'))
 
+    def test_new_branch_checks_history_known_only_to_other_remote(self):
+        self.seed()
+        other=self.root/'other.git'
+        self.assertEqual(self.process(['git','init','-q','--bare',str(other)]).returncode,0)
+        self.assertEqual(self.git('remote','add','other',str(other)).returncode,0)
+        (self.work/'AGENTS.md').write_text('Unapproved elsewhere\n');self.commit_all('elsewhere')
+        self.assertEqual(self.git('push','--no-verify','other','HEAD:refs/heads/main').returncode,0)
+        self.assertEqual(self.git('fetch','-q','other').returncode,0)
+        (self.work/'AGENTS.md').write_text('Approved fixture rules\n');self.commit_all('restore')
+        self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
+        self.assertIsNone(self.remote_oid('refs/heads/feature'))
+
     def test_linked_worktree_shares_approvals(self):
         other=self.root/'linked'
         self.assertEqual(self.git('worktree','add','-qb','other',str(other)).returncode,0)
