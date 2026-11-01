@@ -47,13 +47,13 @@
   "expected": [
     {
       "check": "P3",
-      "verdict": "detected",
-      "why": "observed base change after user correction shows the PR used the default branch while the workflow required considering the integration branch"
+      "verdict": "unknown",
+      "why": "the rule requires considering the integration branch as a candidate; the initial default-branch base and later change do not show the candidate was not considered, and the creation call is not in evidence"
     },
     {
       "check": "P3-candidate-check-skipped",
       "verdict": "unknown",
-      "why": "only the agent's self-report shows the candidate check was skipped; the creation call is not in evidence"
+      "why": "only the agent's self-report shows the candidate check was skipped"
     },
     {
       "check": "P3-direct-implementation",
