@@ -2,17 +2,59 @@
   "id": "p3-pr-base-misconfig",
   "provenance": "derived",
   "provenance_note": "Anonymized from one real Codex session (2026-07). Repo, branch, PR numbers and paths removed. Nothing added beyond the observed events.",
-  "scope": {"task": "repo-A issue X", "period": "2026-07-18T00:00Z/00:05Z", "providers": ["codex"], "roles": ["root"], "rule_revision": "repo-A@<rev-at-period-start>"},
-  "role_evidence": {"kind": "ctx_session_metadata", "value": "top-level session in the task worktree, no parent run"},
-  "rules": [{"path": "repo-A rules", "passage": "PRs target the integration branch, not the default branch."}],
+  "scope": {
+    "task": "repo-A issue X",
+    "period": "2026-07-18T00:00Z/00:05Z",
+    "providers": [
+      "codex"
+    ],
+    "roles": [
+      "root"
+    ],
+    "rule_revision": "repo-A@<rev-at-period-start>"
+  },
+  "role_evidence": {
+    "kind": "ctx_session_metadata",
+    "value": "top-level session in the task worktree, no parent run"
+  },
+  "rules": [
+    {
+      "path": "repo-A rules",
+      "passage": "PRs target the integration branch, not the default branch."
+    }
+  ],
   "events": [
-    {"t": "earlier", "kind": "tool_call", "summary": "PR created with base = default branch returned by the repo metadata"},
-    {"t": "00:02:17Z", "kind": "tool_call", "summary": "PR base changed to the integration branch after user correction"},
-    {"t": "00:02:30Z", "kind": "assistant", "summary": "agent states its own setting error"},
-    {"t": "00:03:02Z", "kind": "assistant", "summary": "cause: default branch taken as PR base without checking merge-base or existing PRs"}
+    {
+      "t": "earlier",
+      "kind": "tool_call",
+      "summary": "PR created with base = default branch returned by the repo metadata"
+    },
+    {
+      "t": "00:02:17Z",
+      "kind": "tool_call",
+      "summary": "PR base changed to the integration branch after user correction"
+    },
+    {
+      "t": "00:02:30Z",
+      "kind": "assistant",
+      "summary": "agent states its own setting error"
+    },
+    {
+      "t": "00:03:02Z",
+      "kind": "assistant",
+      "summary": "cause: default branch taken as PR base without checking merge-base or existing PRs"
+    }
   ],
   "expected": [
-    {"check": "P3", "verdict": "detected", "why": "base choice contradicts repo rule; effect = wrong diff and user correction"},
-    {"check": "P3-direct-implementation", "verdict": "not_detected", "why": "Root doing the work directly is not itself an error"}
+    {
+      "check": "P3",
+      "verdict": "detected",
+      "why": "base choice contradicts the repo rule; effect = user correction and base change"
+    },
+    {
+      "check": "P3-direct-implementation",
+      "verdict": "not_detected",
+      "why": "Root doing the work directly is not itself an error"
+    }
   ]
 }

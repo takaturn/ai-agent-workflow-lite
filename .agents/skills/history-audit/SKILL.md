@@ -14,7 +14,8 @@ Never do as an implicit part of this Skill: config changes, automatic fixes, chi
 ## Procedure
 
 1. **Pin scope** and write it first: `task`, `period` (UTC), `providers`, `roles`, `rule_revision`.
-   - Find the revision in force: `git log -1 --format=%H --until=<period start> <base> -- AGENTS.md .agents docs` and read with `git show <rev>:<path>`. Split the period if rules changed inside it. Use the audited repository, which may differ from this one.
+   - Identify the checkout the audited session actually used: repository, branch/ref and worktree from ctx session metadata (cwd, worktree) and run summaries. If the session's ref cannot be identified, the revision is `unknown`; do not assume `main` or the current branch.
+   - On that ref, the revision in force at period start is `git log -1 --format=%H --until=<period start> <ref> -- AGENTS.md CLAUDE.md .agents docs config`. List changes inside the period with `git log --format='%H %cI' --since=<start> --until=<end> <ref> -- <same paths>` and split the period at each one. Read rules with `git show <rev>:<path>`. Commit time is not deployment time: if the session may have run an older or uncommitted checkout, record that as an uncertainty.
    - Never substitute the current checkout or working branch. If the revision cannot be pinned, set `rule_revision: unknown`; every finding in that span becomes `unknown`.
 2. **Check evidence coverage** before interpreting searches. `ctx status`/`ctx sources`, and the newest indexed session time and session count for the provider and period (`ctx sql` when available; otherwise timestamps from `ctx search --refresh off` results). Use `--refresh off`.
    - Absent, stale, failed or unreadable coverage is reported as a **gap**. A gap is never "no problem".
