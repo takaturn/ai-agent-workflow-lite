@@ -73,6 +73,8 @@ def snapshot(paths, revision=None):
                 if not path.exists():continue
                 if path.is_dir():continue
                 if not path.is_file():raise ValueError('unsupported protected entry')
+                # Python bytecode caches are never published; they must not block (#30).
+                if path.suffix == '.pyc' and path.parent.name == '__pycache__':continue
                 mode = '100755' if path.stat().st_mode & 0o111 else '100644'
                 entries[str(path.relative_to(root))] = [mode, digest(path.read_bytes())]
     return digest(canonical(entries))
