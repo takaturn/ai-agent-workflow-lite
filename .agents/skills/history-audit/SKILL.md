@@ -14,10 +14,9 @@ Never do as an implicit part of this Skill: config changes, automatic fixes, chi
 ## Procedure
 
 1. **Pin scope** and write it first: `task`, `period` (UTC), `providers`, `roles`, `rule_revision`.
-   - Identify the checkout the audited session actually used: repository, branch/ref and worktree from ctx session metadata (cwd, worktree) and run summaries. If the session's ref cannot be identified, the revision is `unknown`; do not assume `main` or the current branch.
-   - Rule paths: start with `AGENTS.md`, `CLAUDE.md`, `README.md`, `.agents/`, `docs/`, `config/`. After finding the candidate revision below, read the rules there and add any file they reference as a rule (e.g. orchestrate → README role policy, AGENTS.md → workflow docs); if the list grew, redo the revision search and in-period tracking with the full list.
-   - Pin only on a checkout the session actually ran: a HEAD SHA observed in the session or run records (tool output of `git rev-parse`/`git log`, ctx activity facts, summary fields). Rules in force are `git show <that-sha>:<rule paths>`; a later observed HEAD starts a new span.
-   - Without an observed HEAD for a span, its `rule_revision` is `unknown`. You may list the candidate from `git log --first-parent --format='%H %cI' <ref> -- <rule paths>` (last commit integrated before the span) as context, but never as the pinned revision.
+   - Find the checkout the session ran: a HEAD SHA observed in the session or run records (tool output of `git rev-parse`/`git log`, ctx activity facts, summary fields), plus the repository and worktree from ctx metadata. An observed HEAD is sufficient even if the branch name is unknown. A later observed HEAD starts a new span.
+   - Rule paths at that HEAD: start with `AGENTS.md`, `CLAUDE.md`, `README.md`, `.agents/`, `docs/`, `config/`; read them with `git show <head>:<path>` and add any file they reference as a rule (e.g. orchestrate → README role policy, AGENTS.md → workflow docs). Use the final list for every span.
+   - A span without an observed HEAD has `rule_revision: unknown`. You may report the `git log --first-parent` candidate on the branch as context, but never read rules from it as the pinned revision.
    - Never substitute the current checkout or working branch. If the revision cannot be pinned, set `rule_revision: unknown`; every finding in that span becomes `unknown`.
 2. **Check evidence coverage** before interpreting searches. `ctx status`/`ctx sources`, and the newest indexed session time and session count for the provider and period (`ctx sql` when available; otherwise timestamps from `ctx search --refresh off` results). Use `--refresh off`.
    - Absent, stale, failed or unreadable coverage is reported as a **gap**. A gap is never "no problem".
