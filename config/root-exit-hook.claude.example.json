@@ -1,0 +1,27 @@
+{
+  "description": "Merge into ~/.claude/settings.json after replacing /ABSOLUTE/CHECKOUT; confirm with /hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B /ABSOLUTE/CHECKOUT/.agents/scripts/root-exit-dispatch.py session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "timeout --kill-after=1s 7s python3 -B /ABSOLUTE/CHECKOUT/.agents/scripts/root-exit-dispatch.py stop || printf '%s\\n' '{\"continue\":false,\"stopReason\":\"root_exit_dispatch_unavailable\"}'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -61,7 +61,7 @@ export HERDR_ENV=1 HERDR_PANE_ID=parent
 export LAUNCH_TASK_ID=runner-fixture
 # These are fixture attestations only; no production approval is inferred.
 fixture_policy() {
-  XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+  XDG_STATE_HOME="$1" python3 "$base/.agents/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
     --worktree "$tmp/work" \
     approve --approval-ref fixture-only --provider codex --model gpt-6-luna \
     --additional-launches 100 --paths run-agent >/dev/null
@@ -69,7 +69,7 @@ fixture_policy() {
 claude_policy() {
   local model
   for model in claude-haiku-5-5 claude-sonnet-5-5; do
-    XDG_STATE_HOME="$1" python3 "$base/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+    XDG_STATE_HOME="$1" python3 "$base/.agents/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
       --worktree "$tmp/work" \
       approve --approval-ref "fixture-$model" --provider claude --model "$model" \
       --additional-launches 10 --paths run-agent >/dev/null
@@ -82,34 +82,34 @@ for state_dir in "$tmp/state" "$tmp/lifecycle" "$tmp/mutated" \
   fixture_policy "$state_dir"
 done
 
-test "$(bash "$base/scripts/herdr-context.sh")" = parent
-if HERDR_ENV=0 bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+test "$(bash "$base/.agents/scripts/herdr-context.sh")" = parent
+if HERDR_ENV=0 bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: missing Herdr context accepted' >&2; exit 1
 fi
-if HERDR_PANE_ID=stale bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+if HERDR_PANE_ID=stale bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: pane absent from live layout accepted' >&2; exit 1
 fi
-if HERDR_PANE_ID='' bash "$base/scripts/herdr-context.sh" >/dev/null 2>&1; then
+if HERDR_PANE_ID='' bash "$base/.agents/scripts/herdr-context.sh" >/dev/null 2>&1; then
   echo 'FAIL: missing pane id accepted' >&2; exit 1
 fi
 
 printf 'Do nothing and report.\n' >"$tmp/task.txt"
 # Caller-controlled labels cannot select a different reservation route.
-if (cd "$tmp/work" && LAUNCH_PATH=run-pair bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/path-output" 2>"$tmp/path-error"); then
+if (cd "$tmp/work" && LAUNCH_PATH=run-pair bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/path-output" 2>"$tmp/path-error"); then
   echo 'FAIL: caller-selected route accepted' >&2; exit 1
 fi
 grep -q 'LAUNCH_PATH is unsupported' "$tmp/path-error"
 
 # Missing approval policy must stop before a child pane is created.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/no-policy" TEST_ACTIONS="$tmp/no-policy-actions" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/no-policy-error"); then
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/no-policy-error"); then
   echo 'FAIL: missing launch policy accepted' >&2; exit 1
 fi
 grep -q 'launch reservation denied' "$tmp/no-policy-error"
 if grep -Eq '^(pane split|agent start)$' "$tmp/no-policy-actions"; then
   echo 'FAIL: missing policy launched a child' >&2; exit 1
 fi
-(cd "$tmp/work" && bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
+(cd "$tmp/work" && bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
@@ -126,12 +126,12 @@ grep -Fq "Agent target: name=$name pane=child" "$tmp/error"
 
 # Herdr reports an unseen completion as done, which is also ready for input.
 (cd "$tmp/work" && TEST_AGENT_STATUS=done \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/done-output")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/done-output")
 grep -q '^result: done' "$tmp/done-output"
 
 # Intermediate checkpoints must be visible before the next external step.
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/lifecycle" TEST_INSPECT_STATE=1 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/lifecycle-output" 2>"$tmp/lifecycle-error")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/lifecycle-output" 2>"$tmp/lifecycle-error")
 grep -q '^Run started: run_id=' "$tmp/lifecycle-error"
 grep -q '^result: done' "$tmp/lifecycle-output"
 
@@ -144,7 +144,7 @@ mktemp() {
 }
 export -f mktemp
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/mutated" TEST_MUTATE_TASK=1 TEST_TASK_FILE="$tmp/task.txt" TEST_CAPTURE_PROMPT="$tmp/captured-prompt" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/mutated-output" 2>"$tmp/mutated-error")
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/mutated-output" 2>"$tmp/mutated-error")
 unset -f mktemp
 summary_path=
 while IFS= read -r line; do
@@ -164,7 +164,7 @@ export -f jq
 for phase in initialized pane_created agent_ready prompt_wait result_collected; do
   : >"$tmp/checkpoint-actions"
   if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/checkpoint-$phase" TEST_FAIL_PHASE=$phase TEST_ACTIONS="$tmp/checkpoint-actions" \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/checkpoint-output" 2>"$tmp/checkpoint-error"); then
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/checkpoint-output" 2>"$tmp/checkpoint-error"); then
     echo "FAIL: $phase checkpoint failure accepted" >&2; exit 1
   fi
   grep -q 'cannot record run checkpoint' "$tmp/checkpoint-error"
@@ -181,7 +181,7 @@ unset -f jq
 # Non-ready states must not reach the successful result read.
 for agent_status in working blocked unknown; do
   if (cd "$tmp/work" && TEST_AGENT_STATUS="$agent_status" \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
     >"$tmp/refused-output" 2>"$tmp/refused-error"); then
     echo "FAIL: $agent_status agent accepted" >&2; exit 1
   fi
@@ -194,7 +194,7 @@ for failure in start prompt; do
   start_exit=0; prompt_exit=0
   if [[ $failure == start ]]; then start_exit=34; else prompt_exit=35; fi
   if (cd "$tmp/work" && TEST_START_EXIT=$start_exit TEST_PROMPT_EXIT=$prompt_exit \
-    bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+    bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
     >"$tmp/failed-output" 2>"$tmp/failed-error"); then
     echo "FAIL: $failure failure accepted" >&2; exit 1
   fi
@@ -219,7 +219,7 @@ done
 
 # A failed pane split is prelaunch_error; the consumed reservation remains.
 if (cd "$tmp/work" && TEST_SPLIT_EXIT=42 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
   >"$tmp/prelaunch-output" 2>"$tmp/prelaunch-error"); then
   echo 'FAIL: pane split failure accepted' >&2; exit 1
 fi
@@ -233,7 +233,7 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="pr
 
 # TERM during prompt is recorded as interrupted, without refund.
 if (cd "$tmp/work" && TEST_PROMPT_SIGNAL=1 \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" \
   >"$tmp/interrupted-output" 2>"$tmp/interrupted-error"); then
   echo 'FAIL: interrupted prompt accepted' >&2; exit 1
 fi
@@ -248,7 +248,7 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="in
 # Claude Writer: model/effort from config, no prompt wait, AGENTS.md loaded.
 claude_policy "$tmp/claude"
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-writer-args" TEST_CAPTURE_PROMPT="$tmp/claude-prompt" \
-  bash "$base/scripts/run-agent.sh" implement claude light "$tmp/task.txt" >"$tmp/claude-output" 2>/dev/null)
+  bash "$base/.agents/scripts/run-agent.sh" implement claude light "$tmp/task.txt" >"$tmp/claude-output" 2>/dev/null)
 grep -q '^result: done' "$tmp/claude-output"
 args=$(sed -n '/^--$/,$p' "$tmp/claude-writer-args" | tail -n +2 | tr '\n' ' ')
 [[ $args == '--model claude-haiku-5-5 --effort low --permission-mode dontAsk --allowedTools '* ]] \
@@ -265,19 +265,19 @@ if grep -Eqx -- '--safe-mode|acceptEdits|bypassPermissions|auto|Bash|Bash\(\*\)'
 fi
 # Claude Reviewer gets only read tools.
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-review-args" \
-  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
 args=$(sed -n '/^--$/,$p' "$tmp/claude-review-args" | tail -n +2 | tr '\n' ' ')
 [[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode dontAsk --safe-mode --restricted --strict-mcp-config --tools Read Glob Grep ' ]] \
   || { echo "FAIL: claude review args: $args" >&2; exit 1; }
 # The pre-rename profile name is rejected, not aliased.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" \
-  bash "$base/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >/dev/null 2>&1); then
+  bash "$base/.agents/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >/dev/null 2>&1); then
   echo 'FAIL: claude-only profile accepted' >&2; exit 1
 fi
 # An unverified Claude version must not launch a Reader/Reviewer.
 claude_policy "$tmp/claude-v"
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-v" TEST_CLAUDE_VERSION=2.1.315 TEST_ACTIONS="$tmp/claude-v-actions" \
-  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>"$tmp/claude-v-err"); then
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>"$tmp/claude-v-err"); then
   echo 'FAIL: unverified claude version launched a reviewer' >&2; exit 1
 fi
 grep -q 'verified only on 2.1.314' "$tmp/claude-v-err" || { echo 'FAIL: version gate not the cause' >&2; exit 1; }
@@ -289,12 +289,12 @@ jq -e '.reservations == []' "$tmp/claude-v"/ai-agent-workflow-lite/launch-gate/*
 printf '%s\n' '! touch x' >"$tmp/bang.txt"
 claude_policy "$tmp/claude-b"
 (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-b" TEST_CAPTURE_PROMPT="$tmp/bang-prompt" \
-  bash "$base/scripts/run-agent.sh" review claude standard "$tmp/bang.txt" >/dev/null 2>&1)
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/bang.txt" >/dev/null 2>&1)
 [[ $(head -n1 "$tmp/bang-prompt") == 'Task from Root:' ]] || { echo 'FAIL: prompt not prefixed' >&2; exit 1; }
 
 # A malicious/misconfigured XDG_STATE_HOME must not write to the source tree.
 if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
-  bash "$base/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1); then
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1); then
   echo 'FAIL: in-repo state accepted' >&2; exit 1
 fi
 [[ ! -e "$tmp/work/state" ]] || { echo 'FAIL: rejected state path created files' >&2; exit 1; }

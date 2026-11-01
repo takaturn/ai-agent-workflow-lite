@@ -58,7 +58,7 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
         (root / 'actions').write_text('')
         (root / 'closed').unlink(missing_ok=True)
     def run(**changes):
-        return subprocess.run(['bash', str(BASE / 'scripts/finish-agent.sh'), str(summary), 'Root verified artifact and focused checks'], env=dict(env, **changes), capture_output=True, text=True, timeout=10)
+        return subprocess.run(['bash', str(BASE / '.agents/scripts/finish-agent.sh'), str(summary), 'Root verified artifact and focused checks'], env=dict(env, **changes), capture_output=True, text=True, timeout=10)
     reset()
     process = run()
     assert process.returncode == 0, process

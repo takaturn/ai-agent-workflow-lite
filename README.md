@@ -2,17 +2,19 @@
 
 CLI から **必要なときだけサブエージェントを起動し、その作業を Herdr の Pane で見える化する**ための小さな実験用テンプレートです。
 
+AIの起動・結果回収・Root終了判定に使うスクリプトは `.agents/scripts/`、公開検査・Git hook・publisher試作は `scripts/` に置きます。
+
 旧 `ai-agent-workflow-template` のコード・設計契約は引き継ぎません。特に Run Manifest / Evidence Contract / 複雑な再入 Policy は作りません。
 
 ## v0 の範囲
 
 - `.agents/skills/orchestrate/SKILL.md`: Root が実装とレビューを必要に応じて委譲する
 - `.agents/skills/review-depth-router/SKILL.md`: Root が固定diffのレビュー深度（NORMAL/FOCUSED/FULL）を証拠つき採点で選ぶ。既存の独立レビュー必須条件を弱めず、起動・マージ権限は与えない
-- `scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
-- `scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
-- `scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
-- `scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
-- `scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
+- `.agents/scripts/herdr-context.sh`: 現在の Herdr Pane を実際の CLI 応答で検証
+- `.agents/scripts/run-agent.sh`: 1体を起動し、短い結果を回収する薄いアダプタ
+- `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
+- `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
+- `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
 - `config/models.json`: light / standard / deep の明示マッピング
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
@@ -27,17 +29,17 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 Herdr が管理する Pane 内で:
 
 ```bash
-bash scripts/herdr-context.sh
+bash .agents/scripts/herdr-context.sh
 bash tests/test-runner.sh
 
 # デモ用タスクファイル。秘密情報は書かない。
 printf '%s\n' 'READMEの誤字を一箇所だけ修正し、差分を確認して報告する。' > /tmp/ai-work-demo.txt
 export LAUNCH_TASK_ID=issue-51-demo # 同じタスクの全worktree・再開で固定
 # 以下はユーザーの明示承認が既にある場合だけ実行する。
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve \
   --approval-ref '<承認記録の参照>' --provider claude --model claude-haiku-5-5 \
   --additional-launches 1 --paths run-agent
-bash scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
+bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude> <light|standard|deep> <task-file>` です。既定は `claude` で、`codex` は承認済みproviderとして選ぶ場合に残しています（旧名 `claude-only` は受け付けません）。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
@@ -49,9 +51,9 @@ bash scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 `approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。`--approval-ref` はタスク内で一意な承認イベントIDとして扱います。同じ参照・同じ内容の再登録はno-opで、上限到達や明示停止も解除しません。同じ参照で内容を変更した再登録は拒否し、別途承認された追加枠には新しい参照を使います。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
 
 ```bash
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" status
 # ユーザーが停止を明示したとき:
-python3 scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
+python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" stop
 python3 tests/test-launch-gate.py
 ```
 
@@ -66,12 +68,16 @@ python3 tests/test-launch-gate.py
 結果回収後も `root_acceptance=pending`・`cleanup=retained` のままです。Rootが成果・focused testsを独立確認してから、返されたsummaryと短い検証メモで明示的に受け入れます。
 
 ```bash
-bash scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root検証: 成果とfocused testsを確認、秘密情報なし'
+bash .agents/scripts/finish-agent.sh /absolute/run.XXXXXXXX/summary.json 'Root検証: 成果とfocused testsを確認、秘密情報なし'
 ```
 
 helperは同じ親Root・子Pane・agent名・cwd・idle/doneを照合し、受入記録→当該Paneのclose→親layout読戻しの順に処理します。これはRootの検証済みという申告を記録するもので、成果の正しさを自動判定しません。受入とclose結果は別管理で、close未確認ならacceptedでもretainedを残して停止します。close応答の消失も再送せずlayoutで確認し、closedはlayoutで裏付けられた場合だけ記録します。close後の記録失敗は、明示的な再実行で同じ受入Rootと元の検証メモを保持し、親が存在・子が不在ならcloseを再送せずclosedへ収束させます。受入済み・片付け済みの再実行はlayoutと一致する場合だけno-opです。
 
 close要求前に `close_attempted=true` を保存します。要求後も子が見える場合、応答失敗や反映遅延の可能性があるため再実行でもcloseを再送せず、Rootの手動確認で停止します。信頼できる当該タスクのsummaryだけを使い、処理中にPaneを移動・再割当しないでください。失敗・非完了・本人不一致は保持して停止し、自動retry・worktree削除・mergeは行いません。旧summaryや失敗からの手動回復は、既存の本人・状態照合とRoot判断が必要です。決定論的な検証は `python3 tests/test-finish-agent.py`（Herdr模擬）で、実機検証と区別します。
+
+## Root終了前の検査（Issue #15、実機受入前）
+
+CodexとClaude Codeのユーザー設定に `.agents/scripts/root-exit-dispatch.py` をSessionStart/Stop hookとして1回登録すると、Herdr上のこのrepositoryのRootを自動で判定し、Rootが書いた必要作業一覧（`work.json`）と、そのpaneから起動した子runのsummaryを終了前に照合します。残作業があれば上限付きで継続させ、明示停止・予算停止・権限待ちでは停止します。導入手順、作業一覧の書式、守らない範囲は [Root終了ゲート](docs/root-exit-gate.md) を参照してください。fixtureテストはhook有効化や実機受入の証拠ではありません。
 
 ## Worker の branch / worktree 分離（Issue #4）
 
@@ -86,7 +92,7 @@ git branch --list feature/issue4
 # 上記を確認し、汚れ・既存branch・既存割当があれば停止して調査する。
 # 存在する親ディレクトリの絶対パスを指定する。リポジトリ外を推奨。
 git worktree add -b feature/issue4 /absolute/worker-root/issue-4-worker-a HEAD
-bash scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
+bash .agents/scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
 ```
 
 確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。命名は `feature/issue<N>` と `issue-<N>-<worker-id>`。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
@@ -106,7 +112,7 @@ RootはAGENTS.mdからorchestrate Skillを自動適用し、独立した複数�
 Rootが上記手順で2割当を直列準備し、既存稼働割当との重複も照合した後:
 
 ```bash
-LAUNCH_TASK_ID=issue-51-52 bash scripts/run-pair.sh claude worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
+LAUNCH_TASK_ID=issue-51-52 bash .agents/scripts/run-pair.sh claude worker-a 51 /absolute/issue-51-worker-a light /absolute/task-a.txt worker-b 52 /absolute/issue-52-worker-b light /absolute/task-b.txt
 bash tests/test-pair.sh
 ```
 
@@ -159,7 +165,7 @@ python3 scripts/install-gitleaks-hook.py
 python3 tests/test-gitleaks-hook.py
 ```
 
-installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkなどの場合は上書きしません。同じコピーなら再実行はno-opです。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。保護対象のhookをcommitし、人の端末で再承認した後、既存hookが以前の承認済みcommit内のソースと完全一致するときだけ `python3 scripts/install-gitleaks-hook.py --upgrade-approved` で更新できます。更新時は協調的な排他lockと置換直前の再照合を行い、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。承認前・未知のhook・symlink・`core.hooksPath` 設定は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
 
 新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
 
@@ -174,10 +180,10 @@ Gitleaksは組み込みルールを明示して使用し、repo/env設定やigno
 例えば、投稿本文をファイルに固定し、対象と実行コマンドを明示します（既に投稿承認がある場合だけ実行）。`prepare` が出力した記録パスを同じ対象の `publish` へ渡します。
 
 ```bash
-python3 scripts/publication-check.py prepare --target owner/repo:pr:19 \
+python3 scripts/publication-check.py prepare --policy-root "$PWD" --target owner/repo:pr:19 \
   --file /tmp/pr-body.md --context-reviewed -- \
   gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
-python3 scripts/publication-check.py publish --target owner/repo:pr:19 \
+python3 scripts/publication-check.py publish --policy-root "$PWD" --target owner/repo:pr:19 \
   --file /tmp/pr-body.md --receipt /absolute/path/printed-by-prepare.json -- \
   gh pr edit https://github.com/owner/repo/pull/19 --body-file /tmp/pr-body.md
 ```
@@ -193,19 +199,21 @@ raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが�
 
 ユーザーと合意した今回の到達点は、repo管理・AGENTS.mdの禁止ルール・hookによる誤操作防止です。同じ主体による意図的な無効化、未導入clone、raw API投稿などを技術的に排除する保証はありません。この残存リスクを受容した範囲で受入を判断し、Root全面隔離や迂回不能を達成したとは扱いません。post-push CIを公開前防止の代わりにしません。
 
-`config/publication-policy.json` は保護対象を列挙します。ユーザー承認済みの正確なcommitを記録してからnative hookを導入します。
+`config/publication-policy.json` は保護対象を列挙します。新規cloneでは、送信先のbaseブランチと一致する保護対象だけを `bootstrap` が確認し、再作成可能なローカル状態とguardのコピーを作ります。installerは状態がないときにこの処理を呼びます。feature側で保護対象を変更した場合は、文脈確認とユーザー承認後に正確なcommitを別途承認します。
 
 ```sh
-python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
 python3 scripts/install-gitleaks-hook.py
+# 保護対象の正確なcommitを人が承認した後、人の端末で実行する（初回移行のcommitのみ人手）
+python3 scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
+python3 scripts/install-gitleaks-hook.py --upgrade-approved
 python3 tests/test-policy-guard.py
 ```
 
-`approve` は明示承認の申告で、認証ではありません。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。承認記録とguardのコピーはcommon Git directoryでlinked worktree間に共有します。installerは承認を発行しません。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
+`approve` は明示承認の申告で、認証ではありません。`bootstrap` は選択したbaseにないfeatureの変更を承認せず、作業ツリーの保護対象とguardソースが照合済みbaseと完全一致する場合だけ、baseの受入状態をローカルに再構成します。baseが進んで既存状態と異なるときは、人の端末から `python3 scripts/policy-guard.py bootstrap --remote-name origin` を実行します。状態ファイルが消えてもbaseと一致する内容は再構成できます。baseと異なるfeature変更の承認記録が消えた場合は停止し、その正確なcommitの再承認が必要です。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。状態とguardのコピーはcommon Git directoryでlinked worktree間に共有します。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。
 
-native pre-pushは送信する全commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規refは全履歴を確認するため、過去の未承認snapshotがあれば公開を停止して人が確認します。通常ファイルの変更には追加承認不要です。
+policy guardは送信commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規・既存refとも、登録済みの送信先remoteのbaseブランチから到達できないcommitを検査します。baseブランチに含まれるcommitは受入済みと扱い、base専用の人手承認記録は作りません。既定のbaseは `refs/remotes/<remote>/HEAD` です。`develop` などをbaseにする場合は `git -c workflow.baseBranch=develop push ...` と指定します。どのbranchを受入済みbaseとするかは利用者の運用判断で、Rootが公開前に確認します。guardは送信先のbase refが示すOIDと手元のremote-tracking refを照合し、不一致・欠落・無関係な履歴では停止します。この照合は別接続なので、push時の受信側状態を原子的に証明しません。Gitleaksのnative pre-push検査は新規refの全到達可能履歴を引き続き対象にします。各pushの公開前確認も省略しません。通常ファイルの変更には追加承認不要です。
 
-`.claude/settings.json`（Claude Code）と `.codex/hooks.json`（Codex profile用に維持）のPreToolUseも同じ承認状態を確認し、変更検出後の次のtool呼出しを拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、人の端末で内容確認・commit・再承認します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
+`.claude/settings.json`（Claude Code）と `.codex/hooks.json`（Codex）のPreToolUseも同じ承認状態を確認し、未承認の保護対象変更を通知し、既存権限内のローカル修正・検証・commitを継続できます。承認記録破損・実効guard不一致・対象識別失敗は拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、AIが修正・検証・commitを担当でき、人が正確なcommitを確認・承認して再承認コマンドを実行します。公開ラッパーは明示policy rootの承認済みguardをprepare時と送信直前に検査し、未承認変更の公開を拒否します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
 
 Claude Codeのproject hookは、workspaceを信頼したうえで `/hooks` で定義が読み込まれていることを確認して初めて有効と扱います。設定ファイルの配置だけでは有効と報告しません。`disableAllHooks` などのユーザー設定で無効化できる点はAGENTS.mdの受容済みリスクです。Codex profileを使う場合は、Codexの `/hooks` で定義を確認・trustします。エラー/timeoutがCLI側でfail-openになる可能性もあり、native pre-pushの拒否確認と各CLI実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
 
@@ -213,3 +221,8 @@ Claude Codeのproject hookは、workspaceを信頼したうえで `/hooks` で�
 ## 隔離publisherの実装
 
 `scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureは検討過程のプロトタイプとして残しています。[実装した契約・未検証範囲](docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていません。今回の受入や通常の公開手順にpublisherの配備・Root切替は要求せず、拡張もしません。
+
+### 既存guardからの一度限りの移行
+旧実効guardは保護対象変更時にtoolを拒否するため、今回の候補の適用・検証・commit・正確なcommitへの再承認は人の端末で一度に実施する。旧guardを無効化・削除せず、再承認が新guardを配置した後に、AIのローカル更新が可能となる。旧hookコマンドの互換呼出しは維持する。移行前からAIがcommitできるとは主張しない。
+
+公開receiptはpolicy root・common directory・実効guard・承認state・現在の保護対象snapshotを固定する。承認やsnapshotが変わったら文脈確認とprepareからやり直す。Wiki公開のpolicy rootは作業を管理する本体を指定する。

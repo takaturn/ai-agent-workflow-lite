@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-GATE = Path(__file__).resolve().parents[1] / "scripts/launch-gate.py"
+GATE = Path(__file__).resolve().parents[1] / ".agents/scripts/launch-gate.py"
 
 
 class LaunchGateTest(unittest.TestCase):
