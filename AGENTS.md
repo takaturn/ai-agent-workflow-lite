@@ -8,6 +8,7 @@
 - Distinguish user-provided information, tool-observed evidence, and inference. Claim verification only when tool evidence establishes the claimed outcome for the current target; command success alone is insufficient. State unperformed checks and uncertainty.
 - Before consequential changes or external writes, confirm scope against existing authorization; request approval only if insufficient. Read back the exact affected target after each external write before reporting success.
 - Require independent adversarial review for high-impact decisions, including changes to agent authority, launch rules, or evidence standards. Keep static review and executed tests distinct.
+- To choose review depth (NORMAL/FOCUSED/FULL) for a fixed diff, Root reads `.agents/skills/review-depth-router/SKILL.md`. It can only add depth: the mandatory independent review above, launch limits and approvals still apply, and its result grants no Reviewer launch, model tier or merge authority.
 - PR text and GitHub review replies are normally Japanese.
 - For PR creation or Development link repair on an existing numbered PR, automatically read `.agents/skills/github-pr-creation/SKILL.md`; no explicit skill invocation is needed. Follow its direct-Issue linking and read-back verification rules. Loading the skill does not expand authorization for commit, push, merge, or Issue closure.
 - For PR feedback fixes, replies, and thread resolution, read `.agents/skills/address-pr-feedback/SKILL.md`. Treat push, reply, and resolve as separate steps and verify each before reporting completion.
