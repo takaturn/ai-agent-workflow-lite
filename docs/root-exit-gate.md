@@ -94,12 +94,16 @@ python3 -B .agents/scripts/root-exit-check.py --declaration PATH/work.json --par
   - SessionStartの案内を受けて、作業の前に `work.json` を宣言した（writable_roots追加後で、承認は求められなかった）。
   - 完了後は `all_declared_checks_complete` で終了した。
   - 制御入力で、作業をreadyのまま終了するよう指示した。Stopは3回継続させ、作業が済んだ後に完了で終了した。
+- **停止優先・継続上限・分離（Codex Root、制御入力）：**
+  - readyの作業を実行しないよう指示したところ、Stopは10回継続させた後、`continuation_count_limit` で停止した。
+  - 次のturnでwork.jsonを `explicit_stop` にすると、readyの作業が残っていても継続させずに停止した。
+  - 別のRoot（Claude Code）のpaneから起動した子runが受入前のまま残っていても、Codex Rootは影響されずに完了で終了した。その子runは、起動したRoot側で `verify_and_accept` として挙がった。
+  - Rootの数え間違いで起動枠を使い切ったrunは `prelaunch_error` となり、paneは作られなかった。`failure_resolution` を記録するhelperがないため、Rootがsummaryに直接記録した。
 - **事前に分かっていたこと：**
   - 子Claudeの起動は、#24の版チェック（`2.1.314` のみ）に予約前で拒否され、起動枠は消費されなかった。
 - **未確認：**
-  - 他Rootとの同時実行の分離（fixtureでのみ確認）
-  - 継続上限への実際の到達（fixtureでのみ確認）
   - resumeやfork後のsession IDの扱い
+  - 失敗runの解決を記録するhelper（未実装）
 
 ## 旧revisionでのCodex実機確認（2026-10-31）
 
