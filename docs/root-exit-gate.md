@@ -50,7 +50,7 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
 
 `/ABSOLUTE/CHECKOUT` を、採用したrevisionのcheckoutの絶対pathに置き換えてから、次のように追加する。
 
-- Codex: `config/root-exit-hook.example.json` を `~/.codex/hooks.json` の既存のSessionStart・Stop配列へ追加する。
+- Codex: `config/root-exit-hook.example.json` を `~/.codex/hooks.json` の既存のSessionStart・Stop配列へ追加する。sandboxが `workspace-write` の場合は、Rootが `work.json` を書けるように `~/.codex/config.toml` の `[sandbox_workspace_write].writable_roots` へ `~/.local/state/ai-agent-workflow-lite/root-exit` の絶対pathを追加する。
 - Claude Code: `config/root-exit-hook.claude.example.json` を `~/.claude/settings.json` の `hooks` へ追加する。
 
 その後、各CLIの `/hooks` で次を確認する。
@@ -66,8 +66,8 @@ Codexではtrustをhookの定義のhashごとに行う。定義を変えたら�
 - 全layerのhookはマージされる。
 - Stopは入力に `session_id`、`cwd`、`stop_hook_active` を含み、出力の `decision:"block"` と `reason` で継続する。`continue:false` は継続より優先する。
 - SessionStartは `hookSpecificOutput.additionalContext` で文脈を追加できる。
-- hook環境に `HERDR_PANE_ID` が渡ることは、既存のherdr hookの動作から推定した（実機で確認が必要）。
-- Claude Code（https://docs.claude.com/en/docs/claude-code/hooks）もStop/SessionStartで同じ入出力を使う。実機での確認は未実施。
+- hook環境に `HERDR_PANE_ID` が渡ることは、下記の実機確認で両CLIとも確認した。
+- Claude Code（https://docs.claude.com/en/docs/claude-code/hooks）もStop/SessionStartで同じ入出力を使う。
 - 未確認: resumeやfork後のsession IDの扱い、CLI側の連続blockの上限。
 
 ## 手動確認
@@ -77,6 +77,29 @@ python3 -B .agents/scripts/root-exit-check.py --declaration PATH/work.json --par
 ```
 
 完了なら終了code 0、それ以外は2。`python3 -B tests/test-root-exit-check.py` と `tests/test-root-exit-dispatch.py` はfixtureによる検証であり、hookの有効化や実機受入の証拠ではない。
+
+## 実機確認（2026-11-01、revision 882b0e3）
+
+普段の起動経路（Herdrのpane、ユーザー設定のhook）で確認した。
+
+- **Claude Code 2.1.316がRoot：**
+  - 作業一覧がないときにStopが1回だけblockした。
+  - 宣言した作業を残して終了しようとすると継続させた。
+  - 子run（Codex light）が実行中のときは `collect_result`、回収後は `verify_and_accept` を挙げた。
+  - `finish-agent.sh` で受入とcleanupをした後は、その子runを残作業から外した。
+  - CI結果の確認を作業一覧に入れたところ、結果が出るまで終了させなかった。
+  - 権限待ちだけが残ったときは `blocked_work` で終了した。
+  - 子runの回答内容は誤りで、受入の記録で不合格としている（今回の確認対象はlifecycle）。
+- **Codex 0.166.0（gpt-6-luna）がRoot：**
+  - SessionStartの案内を受けて、作業の前に `work.json` を宣言した（writable_roots追加後で、承認は求められなかった）。
+  - 完了後は `all_declared_checks_complete` で終了した。
+  - 制御入力で、作業をreadyのまま終了するよう指示した。Stopは3回継続させ、作業が済んだ後に完了で終了した。
+- **事前に分かっていたこと：**
+  - 子Claudeの起動は、#24の版チェック（`2.1.314` のみ）に予約前で拒否され、起動枠は消費されなかった。
+- **未確認：**
+  - 他Rootとの同時実行の分離（fixtureでのみ確認）
+  - 継続上限への実際の到達（fixtureでのみ確認）
+  - resumeやfork後のsession IDの扱い
 
 ## 旧revisionでのCodex実機確認（2026-10-31）
 
