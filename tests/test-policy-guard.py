@@ -313,6 +313,17 @@ class PolicyGuardTest(unittest.TestCase):
             self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
             self.assertEqual(hook.read_bytes(),foreign)
             hook.write_bytes(old)
+            # An external installer may not carry bytes the target never approved.
+            (other.work/'scripts/pre-push-gitleaks.py').write_bytes(b'#!/bin/sh\nexit 4\n')
+            self.assertEqual(other.git('commit','-qam','approved other hook').returncode,0)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','other-hook'],cwd=other.work).returncode,0)
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),old)
+            (other.work/'scripts/pre-push-gitleaks.py').write_bytes(new)
+            self.assertEqual(other.git('commit','-qam','approved new hook again').returncode,0)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','new-hook-again'],cwd=other.work).returncode,0)
             self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
             self.assertEqual(hook.read_bytes(),new)
             self.assertTrue(os.access(hook,os.X_OK))

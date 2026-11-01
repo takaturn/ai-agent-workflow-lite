@@ -23,9 +23,14 @@ if (( failed )); then
   layout=$(herdr pane layout --pane "$parent") || die 'cannot read layout'
   jq -e --arg parent "$parent" 'any(.result.layout.panes[]; .pane_id==$parent)' >/dev/null <<<"$layout" || die 'parent absent from layout'
   if [[ -n $pane ]] && jq -e --arg pane "$pane" 'any(.result.layout.panes[]; .pane_id==$pane)' >/dev/null <<<"$layout"; then
-    record=$(herdr pane get "$pane") || die 'child pane unreadable; retain for diagnosis'
-    jq -e --arg pane "$pane" --arg cwd "$cwd" '.result.pane.pane_id==$pane and .result.pane.cwd==$cwd' \
+    # A failed runner outcome does not mean the child stopped; never close active work.
+    record=$(herdr agent get "$pane") || die 'child agent unreadable; retain for diagnosis'
+    name=$(jq -r '.agent_name // ""' "$summary")
+    jq -e --arg pane "$pane" --arg cwd "$cwd" --arg name "$name" \
+      '.result.agent.pane_id==$pane and .result.agent.cwd==$cwd and ($name=="" or .result.agent.name==$name)' \
       >/dev/null <<<"$record" || die 'identity mismatch'
+    jq -e '.result.agent.agent_status=="idle" or .result.agent.agent_status=="done"' \
+      >/dev/null <<<"$record" || die 'child not settled; retain for diagnosis'
     herdr pane close "$pane" || printf 'finish-agent: close reply failed; checking layout\n' >&2
     layout=$(herdr pane layout --pane "$parent") || die 'cleanup unverified; cannot read layout'
     jq -e --arg pane "$pane" 'all(.result.layout.panes[]; .pane_id!=$pane)' >/dev/null <<<"$layout" || die 'cleanup unverified; child still visible'

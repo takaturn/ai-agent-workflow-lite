@@ -113,6 +113,11 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
     process = run_failed()
     assert process.returncode == 0 and 'pane close' not in (root / 'actions').read_text(), process
     assert json.loads(summary.read_text())['cleanup'] == 'closed'
+    for status in ('working', 'blocked', 'unknown'):
+        reset(status='failed', phase='pane_created', exit_code=2)
+        process = run_failed(TEST_STATUS=status)
+        assert process.returncode != 0 and 'not settled' in process.stderr, (status, process)
+        assert json.loads(summary.read_text())['cleanup'] == 'retained'
     for changes, fields, reason in [({}, {}, 'not a failed run'), ({'HERDR_PANE_ID':'different'}, {'status':'failed'}, 'parent mismatch')]:
         reset(**fields)
         process = run_failed(**changes)

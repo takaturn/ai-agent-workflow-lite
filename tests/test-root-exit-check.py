@@ -157,6 +157,21 @@ class ExitCheck(unittest.TestCase):
                                           checker.new_state(100), 101)
         self.assertEqual(output, {"continue": False, "stopReason": "explicit_stop"})
 
+    def test_state_root_inside_git_is_rejected(self):
+        repo = Path(__file__).resolve().parents[1]
+        old = os.environ.get("XDG_STATE_HOME")
+        try:
+            os.environ["XDG_STATE_HOME"] = str(repo / "state")
+            with self.assertRaises(ValueError):
+                checker.state_root()
+            os.environ["XDG_STATE_HOME"] = str(self.home / "state")
+            self.assertEqual(checker.state_root(), self.root)
+        finally:
+            if old is None:
+                os.environ.pop("XDG_STATE_HOME")
+            else:
+                os.environ["XDG_STATE_HOME"] = old
+
     def test_cli(self):
         self.decl["out_of_scope"] = "question only"
         path = self.home / "work.json"

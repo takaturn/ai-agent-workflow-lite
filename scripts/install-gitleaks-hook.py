@@ -25,6 +25,18 @@ def approved_previous_hook(common, installed):
     return False
 
 
+def approved_current_hook(common, source):
+    """An upgrade installs only the bytes of this repository's latest approval."""
+    state = json.loads((common/'workflow-policy-approvals.json').read_bytes())
+    revision = state['approvals'][-1]['revision']
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
+        raise ValueError('invalid approval revision')
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+    approved = subprocess.check_output(['git', 'show', revision+':scripts/pre-push-gitleaks.py'],
+                                       stderr=subprocess.PIPE, timeout=10, env=env)
+    return source == approved
+
+
 def main():
     try:
         if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] != '--upgrade-approved'):
@@ -62,6 +74,8 @@ def main():
         if any(parent.is_symlink() for parent in (hook.parent, *hook.parent.parents)):
             raise ValueError('hook parent symlink')
         source = Path(__file__).resolve().with_name('pre-push-gitleaks.py').read_bytes()
+        if upgrade and not approved_current_hook(common, source):
+            raise ValueError('replacement hook is not the approved version')
         if hook.is_symlink():
             raise ValueError('existing symlink')
         if hook.exists():

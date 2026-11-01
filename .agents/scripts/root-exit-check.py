@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 
@@ -45,7 +46,15 @@ def exact(value, keys):
 def state_root():
     raw = os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
     require(Path(raw).is_absolute())
-    return Path(raw).resolve() / "ai-agent-workflow-lite"
+    root = Path(raw).resolve()
+    ancestor = root
+    while not ancestor.exists():
+        ancestor = ancestor.parent
+    # Runtime data must stay outside Git so declarations are never staged or published.
+    probe = subprocess.run(["git", "-C", str(ancestor), "rev-parse", "--show-toplevel"],
+                           capture_output=True, timeout=3)
+    require(probe.returncode != 0)
+    return root / "ai-agent-workflow-lite"
 
 
 def declaration(value):
