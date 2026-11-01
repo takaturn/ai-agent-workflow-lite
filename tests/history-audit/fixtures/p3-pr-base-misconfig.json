@@ -1,0 +1,64 @@
+{
+  "id": "p3-pr-base-misconfig",
+  "provenance": "derived",
+  "provenance_note": "Anonymized from one real Codex session (2026-07). Repo, branch, PR numbers and paths removed. Rule passage paraphrases the audited repo's workflow doc at the observed HEAD; the PR creation call itself is not in the index and the original file was unreachable.",
+  "scope": {
+    "task": "repo-A issue X",
+    "period": "2026-07-18T00:00Z/00:05Z",
+    "providers": [
+      "codex"
+    ],
+    "roles": [
+      "root"
+    ],
+    "rule_revision": "repo-A@<observed session HEAD>; rule text unchanged at the later observed HEAD"
+  },
+  "role_evidence": {
+    "kind": "ctx_session_metadata",
+    "value": "root relationship in ctx, task worktree cwd, no run summary"
+  },
+  "rules": [
+    {
+      "path": "repo-A AGENTS.md",
+      "passage": "Relevant repository docs and workflows are sources of truth for the task."
+    },
+    {
+      "path": "repo-A worktree workflow doc",
+      "passage": "Before opening the PR: if the repository uses a non-main integration branch, include it as a base candidate before creating the PR."
+    }
+  ],
+  "events": [
+    {
+      "t": "T1",
+      "kind": "tool_call",
+      "summary": "PR base edited from the default branch to the integration branch; justification text says the base was wrong"
+    },
+    {
+      "t": "T1",
+      "kind": "assistant",
+      "summary": "agent states its own setting error after user correction"
+    },
+    {
+      "t": "T2",
+      "kind": "assistant",
+      "summary": "agent explains it took the default branch from repo metadata without comparing candidates (self-report)"
+    }
+  ],
+  "expected": [
+    {
+      "check": "P3",
+      "verdict": "unknown",
+      "why": "the rule requires considering the integration branch as a candidate; the initial default-branch base and later change do not show the candidate was not considered, and the creation call is not in evidence"
+    },
+    {
+      "check": "P3-candidate-check-skipped",
+      "verdict": "unknown",
+      "why": "only the agent's self-report shows the candidate check was skipped"
+    },
+    {
+      "check": "P3-direct-implementation",
+      "verdict": "not_detected",
+      "why": "Root doing the work directly is not itself an error"
+    }
+  ]
+}
