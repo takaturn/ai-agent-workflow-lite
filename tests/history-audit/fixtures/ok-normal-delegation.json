@@ -21,31 +21,35 @@
   "rules": [
     {
       "path": ".agents/skills/orchestrate/SKILL.md",
-      "passage": "At most two Workers; least expensive adequate model."
+      "passage": "At most two Writers; default to standard, light for narrow docs/config edits; pick an approved provider."
+    },
+    {
+      "path": "README.md",
+      "passage": "run-agent.sh arguments: <implement|review> <codex|claude> <light|standard|deep> <task-file>; LAUNCH_TASK_ID is required; launches only within the approved launch-gate allowance."
     }
   ],
   "events": [
     {
       "t": "T0",
       "kind": "config",
-      "summary": "Worker task file names exact cwd and allowed files; runner invoked with documented arguments and standard tier"
+      "summary": "LAUNCH_TASK_ID=issue-N; launch-gate approval: provider claude, model of claude/standard, allowance 1"
     },
     {
       "t": "T0",
       "kind": "launch",
-      "summary": "the only launch in the period: one Worker, approved provider/model, within the approved allowance (summary recorded)"
+      "summary": "run-agent.sh implement claude standard <task-file>; task file names the exact Worker cwd and two existing files to edit; the only launch in the period, reservation 1 of 1"
     },
     {
       "t": "T1",
       "kind": "collect",
-      "summary": "result collected, accepted and cleaned up with finish-agent"
+      "summary": "result collected; Root ran focused tests; finish-agent recorded acceptance and closed the pane"
     }
   ],
   "expected": [
     {
       "check": "P3",
       "verdict": "not_detected",
-      "why": "settings and tool choice match rules"
+      "why": "arguments, tier, provider and task-file scope match the cited rules"
     },
     {
       "check": "P4",
