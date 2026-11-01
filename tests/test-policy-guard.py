@@ -404,6 +404,67 @@ class PolicyGuardTest(unittest.TestCase):
         self.assertNotEqual(self.push('HEAD:refs/heads/feature').returncode,0)
         self.assertIsNone(self.remote_oid('refs/heads/feature'))
 
+    def allowed(self):
+        return self.guard('check').returncode==0 and self.hook().stdout==''
+
+    def test_ignored_cache_does_not_block_and_digest_is_stable(self):
+        (self.work/'.gitignore').write_text('__pycache__/\n');self.commit_all('ignore')
+        self.assertEqual(self.guard('approve','--approval-ref','fixture-ignore').returncode,0)
+        module=importlib.util.spec_from_file_location('guard_under_test',self.work/'scripts/policy-guard.py')
+        guard=importlib.util.module_from_spec(module);module.loader.exec_module(guard)
+        paths=json.loads((self.work/'config/publication-policy.json').read_text())['protected_paths']
+        cwd=os.getcwd();os.chdir(self.work)
+        try:self.assertEqual(guard.snapshot(paths),guard.snapshot(paths,'HEAD'))
+        finally:os.chdir(cwd)
+        cache=self.work/'.agents/skills/sample/__pycache__'
+        (self.work/'.agents/skills/sample/x.py').parent.mkdir(parents=True)
+        (self.work/'.agents/skills/sample/x.py').write_text('x=1\n');self.commit_all('skill')
+        self.assertEqual(self.guard('approve','--approval-ref','fixture-skill').returncode,0)
+        cache.mkdir();(cache/'x.pyc').write_bytes(b'cache')
+        self.assertTrue(self.allowed())
+        self.assertEqual(self.guard('approve','--approval-ref','fixture-skill-2').returncode,0)
+        (cache/'x.py').write_text('not bytecode\n')
+        self.assertFalse(self.allowed())
+        (cache/'x.py').unlink();(cache/'y.pyc').symlink_to('x.pyc')
+        self.assertFalse(self.allowed())
+
+    def test_gitignore_cannot_hide_new_protected_file(self):
+        (self.work/'.gitignore').write_text('.agents/skills/evil/\n')
+        (self.work/'.agents/skills/evil').mkdir(parents=True)
+        (self.work/'.agents/skills/evil/SKILL.md').write_text('evil\n')
+        self.assertFalse(self.allowed())
+
+    def test_tracked_and_unignored_changes_still_denied(self):
+        (self.work/'.gitignore').write_text('*.md\n')
+        self.commit_all('ignore md')
+        self.assertEqual(self.guard('approve','--approval-ref','fixture-md').returncode,0)
+        self.assertTrue(self.allowed())
+        (self.work/'AGENTS.md').write_text('tracked but ignored edit\n')
+        self.assertFalse(self.allowed())
+        self.assertEqual(self.git('checkout','--','AGENTS.md').returncode,0)
+        (self.work/'scripts/policy-guard.py').rename(self.root/'moved.py')
+        self.assertNotEqual(self.guard('check').returncode,0)
+        (self.root/'moved.py').rename(self.work/'scripts/policy-guard.py')
+        self.assertTrue(self.allowed())
+        (self.work/'.agents/skills/new').mkdir(parents=True)
+        (self.work/'.agents/skills/new/run.py').write_text('new\n')
+        self.assertFalse(self.allowed())
+
+    def test_local_excludes_and_self_ignoring_gitignore_denied(self):
+        exclude=Path(self.git('rev-parse','--git-path','info/exclude').stdout.strip())
+        if not exclude.is_absolute():exclude=self.work/exclude
+        exclude.parent.mkdir(parents=True,exist_ok=True);exclude.write_text('hidden.py\n')
+        (self.work/'.agents/skills/a').mkdir(parents=True)
+        (self.work/'.agents/skills/a/hidden.py').write_text('x\n')
+        self.assertFalse(self.allowed())
+        (self.work/'.agents/skills/a/hidden.py').unlink()
+        self.assertTrue(self.allowed())
+        (self.work/'.agents/skills/a/.gitignore').write_text('*\n')
+        self.assertFalse(self.allowed())
+        (self.work/'.agents/skills/a/.gitignore').unlink()
+        (self.work/'.agents/skills/a/link').symlink_to('../../../scripts')
+        self.assertFalse(self.allowed())
+
     def test_linked_worktree_shares_approvals(self):
         other=self.root/'linked'
         self.assertEqual(self.git('worktree','add','-qb','other',str(other)).returncode,0)

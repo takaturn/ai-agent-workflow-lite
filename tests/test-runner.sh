@@ -274,17 +274,15 @@ if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" \
   bash "$base/.agents/scripts/run-agent.sh" implement claude-only light "$tmp/task.txt" >/dev/null 2>&1); then
   echo 'FAIL: claude-only profile accepted' >&2; exit 1
 fi
-# An unverified Claude version must not launch a Reader/Reviewer.
+# Claude Reader/Reviewer launch does not depend on the CLI version (Issue #30).
 claude_policy "$tmp/claude-v"
-if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-v" TEST_CLAUDE_VERSION=2.1.315 TEST_ACTIONS="$tmp/claude-v-actions" \
-  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>"$tmp/claude-v-err"); then
-  echo 'FAIL: unverified claude version launched a reviewer' >&2; exit 1
-fi
-grep -q 'verified only on 2.1.314' "$tmp/claude-v-err" || { echo 'FAIL: version gate not the cause' >&2; exit 1; }
-! grep -Eq '^(pane split|agent start)' "$tmp/claude-v-actions" 2>/dev/null \
-  || { echo 'FAIL: pane or agent created on unverified version' >&2; exit 1; }
-jq -e '.reservations == []' "$tmp/claude-v"/ai-agent-workflow-lite/launch-gate/*/state.json >/dev/null \
-  || { echo 'FAIL: reservation consumed on unverified version' >&2; exit 1; }
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude-v" TEST_CLAUDE_VERSION=2.1.316 TEST_ACTIONS="$tmp/claude-v-actions" TEST_CAPTURE_START="$tmp/claude-v-args" \
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1) \
+  || { echo 'FAIL: other claude version refused a reviewer' >&2; exit 1; }
+grep -Eq '^agent start' "$tmp/claude-v-actions" || { echo 'FAIL: reviewer not started on other version' >&2; exit 1; }
+args=$(sed -n '/^--$/,$p' "$tmp/claude-v-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--model claude-sonnet-5-5 --effort medium --permission-mode dontAsk --safe-mode --restricted --strict-mcp-config --tools Read Glob Grep ' ]] \
+  || { echo "FAIL: reviewer args on other version: $args" >&2; exit 1; }
 # A task starting with ! or / must not reach the interactive input first.
 printf '%s\n' '! touch x' >"$tmp/bang.txt"
 claude_policy "$tmp/claude-b"

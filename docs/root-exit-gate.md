@@ -100,7 +100,7 @@ python3 -B .agents/scripts/root-exit-check.py --declaration PATH/work.json --par
   - 別のRoot（Claude Code）のpaneから起動した子runが受入前のまま残っていても、Codex Rootは影響されずに完了で終了した。その子runは、起動したRoot側で `verify_and_accept` として挙がった。
   - Rootの数え間違いで起動枠を使い切ったrunは `prelaunch_error` となり、paneは作られなかった。当時は `failure_resolution` を記録するhelperがなく、Rootがsummaryに直接記録した。その後 `finish-agent.sh --failed` を追加した。
 - **事前に分かっていたこと：**
-  - 子Claudeの起動は、#24の版チェック（`2.1.314` のみ）に予約前で拒否され、起動枠は消費されなかった。
+  - 子Claudeの起動は、#24の版チェック（`2.1.314` のみ）に予約前で拒否され、起動枠は消費されなかった（この版チェックは #30 で撤去した）。
 - **未確認：**
   - forkの扱い
   - Claude Codeのresume後もsession IDが保たれることは確認した。Codexのresumeは未確認
