@@ -1,0 +1,14 @@
+{
+  "id": "gap-index-missing",
+  "provenance": "constructed",
+  "provenance_note": "Constructed control for a coverage gap; mirrors observed ctx states (stale/failed units).",
+  "scope": {"task": "issue-M", "period": "P", "providers": ["codex"], "roles": ["root"], "rule_revision": "this-repo@<rev>"},
+  "role_evidence": {"kind": "none", "value": "sessions for the period are not indexed"},
+  "coverage": {"newest_indexed_session": "before period", "sessions_in_period": 0, "refresh_permitted": false},
+  "rules": [],
+  "events": [],
+  "expected": [
+    {"check": "P3", "verdict": "unknown", "why": "coverage gap; empty search is not evidence of absence"},
+    {"check": "P4", "verdict": "unknown", "why": "coverage gap"}
+  ]
+}
