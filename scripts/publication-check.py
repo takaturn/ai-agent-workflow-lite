@@ -109,10 +109,27 @@ def scan(payloads):
                 raise ValueError('secret scan detected a candidate or failed; publication blocked')
 
 
+def check_policy(root):
+    root = Path(root)
+    if not root.is_absolute() or root.resolve() != root:
+        raise ValueError('canonical policy root required')
+    common = Path(subprocess.check_output(['git', '-C', str(root), 'rev-parse',
+        '--path-format=absolute', '--git-common-dir'], stderr=subprocess.PIPE,
+        timeout=10).decode().strip())
+    guard = common/'hooks/workflow-policy-guard.py'
+    if guard.is_symlink() or not guard.is_file():
+        raise ValueError('approved installed guard required')
+    identity = subprocess.check_output([sys.executable, str(guard), 'identity'], cwd=root,
+        stderr=subprocess.PIPE, timeout=10)
+    return {'root': str(root), 'common': str(common), 'guard': digest(guard.read_bytes()),
+            'policy': json.loads(identity)}
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('prepare', 'publish'))
+    parser.add_argument('--policy-root', required=True)
     parser.add_argument('--target', required=True, help='exact remote/repository/object')
     parser.add_argument('--file', action='append', default=[])
     parser.add_argument('--git-range', help='all outgoing commits, e.g. origin/main..HEAD')
@@ -127,7 +144,9 @@ def main():
     args = parser.parse_args(argv[:split])
     args.command = argv[split+1:]
     try:
+        policy = check_policy(args.policy_root)
         identity, payloads, command = snapshot(args)
+        identity['policy'] = policy
         directory = state_dir()
         if args.mode == 'prepare':
             if not args.context_reviewed:
@@ -164,6 +183,8 @@ def main():
                 stream.truncate()
                 stream.flush()
                 os.fsync(stream.fileno())
+                if check_policy(args.policy_root) != policy:
+                    raise ValueError('policy changed before dispatch')
                 return subprocess.run(command, check=False).returncode
     except (OSError, ValueError, subprocess.SubprocessError):
         # Exceptions may contain secret command arguments or scanner output.
