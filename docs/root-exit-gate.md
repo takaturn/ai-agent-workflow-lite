@@ -33,7 +33,7 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
    - `task_id` は `LAUNCH_TASK_ID` と同じ値で、起動ゲートの明示停止と起動上限を参照するために使う。
 4. **子run（自動）**: `ai-agent-workflow-lite/*/run.*/summary.json` のうち、`parent_pane_id` が自分のpaneのものだけを対象にする。他Rootのrunはpaneが違うので対象外になる。同じpaneを使った以前のsessionの残りを拾わないように、`task_id` があれば一致するrunだけに絞り、なければsession開始（初回hook時に作る `session-began`）以後に更新されたrunだけに絞る。
    - 未回収・未受入・未cleanupは次の作業として扱う。
-   - 未解決の失敗は、自動継続しないブロッカーとして扱う。
+   - 未解決の失敗は、自動継続しないブロッカーとして扱う。Rootは診断後に `finish-agent.sh --failed <summary> '<診断>'` で解決を記録する（残っている子paneは本人確認のうえ閉じる）。
    - 受入・cleanup済みで、`acceptance_note`（失敗なら `failure_resolution`）があるものは完了として扱う。
    - 読めないsummaryは所有者が分からないので無視する。
 5. **Stop**: 次の順に判定する。
@@ -98,12 +98,12 @@ python3 -B .agents/scripts/root-exit-check.py --declaration PATH/work.json --par
   - readyの作業を実行しないよう指示したところ、Stopは10回継続させた後、`continuation_count_limit` で停止した。
   - 次のturnでwork.jsonを `explicit_stop` にすると、readyの作業が残っていても継続させずに停止した。
   - 別のRoot（Claude Code）のpaneから起動した子runが受入前のまま残っていても、Codex Rootは影響されずに完了で終了した。その子runは、起動したRoot側で `verify_and_accept` として挙がった。
-  - Rootの数え間違いで起動枠を使い切ったrunは `prelaunch_error` となり、paneは作られなかった。`failure_resolution` を記録するhelperがないため、Rootがsummaryに直接記録した。
+  - Rootの数え間違いで起動枠を使い切ったrunは `prelaunch_error` となり、paneは作られなかった。当時は `failure_resolution` を記録するhelperがなく、Rootがsummaryに直接記録した。その後 `finish-agent.sh --failed` を追加した。
 - **事前に分かっていたこと：**
   - 子Claudeの起動は、#24の版チェック（`2.1.314` のみ）に予約前で拒否され、起動枠は消費されなかった。
 - **未確認：**
-  - resumeやfork後のsession IDの扱い
-  - 失敗runの解決を記録するhelper（未実装）
+  - forkの扱い
+  - Claude Codeのresume後もsession IDが保たれることは確認した。Codexのresumeは未確認
 
 ## 旧revisionでのCodex実機確認（2026-10-31）
 

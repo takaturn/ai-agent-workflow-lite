@@ -100,4 +100,22 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
     assert process.returncode != 0 and 'close already attempted' in process.stderr, process
     assert (root / 'actions').read_text().count('pane close child') == 1
     assert run().returncode == 0 and json.loads(summary.read_text())['cleanup']=='closed'
+    def run_failed(**changes):
+        return subprocess.run(['bash', str(BASE / '.agents/scripts/finish-agent.sh'), '--failed', str(summary), 'Root diagnosed: start failed, nothing usable'], env=dict(env, **changes), capture_output=True, text=True, timeout=10)
+    reset(status='failed', phase='pane_created', exit_code=2)
+    process = run_failed()
+    assert process.returncode == 0, process
+    data = json.loads(summary.read_text())
+    assert (data['root_acceptance'], data['cleanup'], data['accepted_by']) == ('accepted', 'closed', 'parent'), data
+    assert data['failure_resolution'].startswith('Root diagnosed'), data
+    assert (root / 'actions').read_text().count('pane close child') == 1
+    reset(status='prelaunch_error', phase='initialized', exit_code=2, pane_id='')
+    process = run_failed()
+    assert process.returncode == 0 and 'pane close' not in (root / 'actions').read_text(), process
+    assert json.loads(summary.read_text())['cleanup'] == 'closed'
+    for changes, fields, reason in [({}, {}, 'not a failed run'), ({'HERDR_PANE_ID':'different'}, {'status':'failed'}, 'parent mismatch')]:
+        reset(**fields)
+        process = run_failed(**changes)
+        assert process.returncode != 0 and reason in process.stderr, (reason, process)
+        assert json.loads(summary.read_text())['root_acceptance'] == 'pending'
     print('PASS: explicit Root acceptance, verified cleanup, idempotence, identity/state refusal, close failure and lost reply')
