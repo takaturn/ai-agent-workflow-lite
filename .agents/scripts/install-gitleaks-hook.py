@@ -10,6 +10,12 @@ import sys
 import tempfile
 
 
+def policy_present():
+    # The pre-#36 policy path still means a policy is present: fail closed.
+    return any(Path(name).exists() for name in
+               ('.agents/config/publication-policy.json', 'config/publication-policy.json'))
+
+
 def approved_previous_hook(common, installed):
     state = json.loads((common/'workflow-policy-approvals.json').read_bytes())
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
@@ -64,7 +70,7 @@ def main():
             lock = lock_path.open('a')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = common/'workflow-policy-approvals.json'
-        if Path('.agents/config/publication-policy.json').exists() and not state.exists():
+        if policy_present() and not state.exists():
             chosen = subprocess.run(['git', 'config', '--get', 'workflow.policyRemote'],
                                     capture_output=True, text=True)
             if chosen.returncode not in (0, 1):
@@ -73,7 +79,7 @@ def main():
             subprocess.run([sys.executable, '.agents/scripts/policy-guard.py', 'bootstrap',
                             '--remote-name', remote], check=True,
                            capture_output=True, timeout=60)
-        if state.exists() or Path('.agents/config/publication-policy.json').exists():
+        if state.exists() or policy_present():
             subprocess.run([sys.executable, str(common/'hooks/workflow-policy-guard.py'), 'check'],
                            check=True, capture_output=True, timeout=10)
         hook = Path(subprocess.check_output(['git', 'rev-parse', '--git-path',

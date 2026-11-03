@@ -7,6 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+POLICIES = ('.agents/config/publication-policy.json', 'config/publication-policy.json')
+
 
 class UnsupportedSubmodule(ValueError):
     pass
@@ -86,7 +88,8 @@ def main():
         lines = sys.stdin.read().splitlines()
         common = Path(git('rev-parse', '--git-common-dir').decode().strip())
         state = common/'workflow-policy-approvals.json'
-        if state.exists() or Path('.agents/config/publication-policy.json').exists():
+        # The pre-#36 policy path still means a policy is present: fail closed.
+        if state.exists() or any(Path(name).exists() for name in POLICIES):
             guard = common/'hooks/workflow-policy-guard.py'
             result = subprocess.run([sys.executable, str(guard), 'pre-push',
                                      '--remote-name', sys.argv[1],

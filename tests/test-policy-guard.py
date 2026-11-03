@@ -395,6 +395,28 @@ class PolicyGuardTest(unittest.TestCase):
         self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
         self.assertEqual(hook.read_bytes(),new_hook)
 
+    def test_legacy_policy_without_state_fails_closed(self):
+        other,policy,state,hook=self.legacy_fixture()
+        self.assertEqual(other.git('reset','-q','--hard','HEAD').returncode,0)
+        state.unlink()
+        (other.work/'.git/hooks/workflow-policy-guard.py').unlink()
+        hook.unlink()
+        installer=[sys.executable,str(BASE/'.agents/scripts/install-gitleaks-hook.py')]
+        result=other.process(installer,cwd=other.work)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('hook install blocked',result.stderr)
+        self.assertFalse(hook.exists())
+        # A current hook installed by other means must not skip the guard either.
+        hook.write_bytes((BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes())
+        hook.chmod(0o700)
+        (other.work/'AGENTS.md').write_text('Unapproved feature rules\n')
+        self.assertEqual(other.git('commit','-qam','unapproved').returncode,0)
+        before=other.remote_oid()
+        result=other.push()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('policy guard failure',result.stderr)
+        self.assertEqual(other.remote_oid(),before)
+
     def test_legacy_state_refuses_other_path_changes(self):
         other,policy,state,hook=self.legacy_fixture()
         before=state.read_bytes()
