@@ -11,7 +11,16 @@ import subprocess
 import sys
 import tempfile
 
-POLICY = 'config/publication-policy.json'
+POLICY = '.agents/config/publication-policy.json'
+# Issue #36 moved these protected files under .agents/. Only this exact rename
+# is migrated in place; any other protected-path change still needs review.
+LEGACY_RENAMES = {
+    'config/publication-policy.json': POLICY,
+    'scripts/policy-guard.py': '.agents/scripts/policy-guard.py',
+    'scripts/install-gitleaks-hook.py': '.agents/scripts/install-gitleaks-hook.py',
+    'scripts/pre-push-gitleaks.py': '.agents/scripts/pre-push-gitleaks.py',
+    'scripts/publication-check.py': '.agents/scripts/publication-check.py',
+}
 
 
 def git(*args, timeout=10):
@@ -32,7 +41,7 @@ def locations():
     return common/'workflow-policy-approvals.json', common/'hooks/workflow-policy-guard.py'
 
 
-def paths_read(value):
+def paths_read(value, legacy=False):
     if set(value) != {'version', 'protected_paths'} or value['version'] != 1:
         raise ValueError('invalid policy')
     paths = value['protected_paths']
@@ -41,10 +50,13 @@ def paths_read(value):
     for name in paths:
         if not isinstance(name, str) or not name or Path(name).is_absolute() or any(p in ('..', '.') for p in name.split('/')):
             raise ValueError('invalid protected path')
-    required = {POLICY, 'scripts/policy-guard.py', 'AGENTS.md', '.codex',
+    required = {POLICY, '.agents/scripts/policy-guard.py', 'AGENTS.md', '.codex',
                 '.claude/settings.json', '.agents/skills',
-                'scripts/install-gitleaks-hook.py', 'scripts/pre-push-gitleaks.py',
-                'scripts/publication-check.py'}
+                '.agents/scripts/install-gitleaks-hook.py', '.agents/scripts/pre-push-gitleaks.py',
+                '.agents/scripts/publication-check.py'}
+    if legacy:
+        moved = {new: old for old, new in LEGACY_RENAMES.items()}
+        required = {moved.get(name, name) for name in required}
     if not required.issubset(paths):
         raise ValueError('guard must protect its configuration')
     return paths
@@ -90,11 +102,11 @@ def atomic(path, raw, mode=0o600):
         if os.path.exists(temporary):os.unlink(temporary)
 
 
-def load():
+def load(legacy=False):
     state, installed = locations()
     if state.is_symlink() or installed.is_symlink():raise ValueError('symlink refused')
     value = json.loads(state.read_bytes())
-    paths_read({'version':1, 'protected_paths':value['paths']})
+    paths_read({'version':1, 'protected_paths':value['paths']}, legacy)
     if value['version'] != 1 or digest(installed.read_bytes()) != value['guard_sha256']:
         raise ValueError('installed guard changed')
     return value
@@ -152,7 +164,7 @@ def bootstrap(remote):
     if snapshot(paths) != candidate:
         raise ValueError('working policy differs from accepted base')
     source = Path(__file__).read_bytes()
-    if source != git('show', base+':scripts/policy-guard.py'):
+    if source != git('show', base+':.agents/scripts/policy-guard.py'):
         raise ValueError('guard source differs from accepted base')
     state, installed = locations()
     if state.is_symlink() or installed.is_symlink():
@@ -196,8 +208,18 @@ def approve(reference):
     if state.is_symlink() or installed.is_symlink():raise ValueError('symlink refused')
     with (state.parent/'.workflow-policy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        previous = load() if state.exists() else None
-        if previous and previous['paths'] != paths:
+        previous = None
+        if state.exists():
+            try:
+                previous = load()
+            except ValueError:
+                # Pre-#36 state: accept only the exact legacy layout renamed by
+                # LEGACY_RENAMES, keeping the state (and its approvals) in place.
+                previous = load(legacy=True)
+                if [LEGACY_RENAMES.get(name, name) for name in previous['paths']] != paths:
+                    raise
+        if previous and previous['paths'] != paths and [
+                LEGACY_RENAMES.get(name, name) for name in previous['paths']] != paths:
             raise ValueError('protected path changes require manual reviewed migration')
         source = Path(__file__).read_bytes()
         if not previous and installed.exists() and installed.read_bytes() != source:

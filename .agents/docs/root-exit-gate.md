@@ -50,8 +50,8 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
 
 `/ABSOLUTE/CHECKOUT` を、採用したrevisionのcheckoutの絶対pathに置き換えてから、次のように追加する。
 
-- Codex: `config/root-exit-hook.example.json` を `~/.codex/hooks.json` の既存のSessionStart・Stop配列へ追加する。sandboxが `workspace-write` の場合は、Rootが `work.json` を書けるように `~/.codex/config.toml` の `[sandbox_workspace_write].writable_roots` へ `~/.local/state/ai-agent-workflow-lite/root-exit` の絶対pathを追加する。
-- Claude Code: `config/root-exit-hook.claude.example.json` を `~/.claude/settings.json` の `hooks` へ追加する。
+- Codex: `.agents/config/root-exit-hook.example.json` を `~/.codex/hooks.json` の既存のSessionStart・Stop配列へ追加する。sandboxが `workspace-write` の場合は、Rootが `work.json` を書けるように `~/.codex/config.toml` の `[sandbox_workspace_write].writable_roots` へ `~/.local/state/ai-agent-workflow-lite/root-exit` の絶対pathを追加する。
+- Claude Code: `.agents/config/root-exit-hook.claude.example.json` を `~/.claude/settings.json` の `hooks` へ追加する。
 
 その後、各CLIの `/hooks` で次を確認する。
 

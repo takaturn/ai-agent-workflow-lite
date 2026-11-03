@@ -30,7 +30,7 @@ Git取り込みには512 MiBの仮想アドレス上限、64 MiBの一時filesys
 管理者はworkspace外かつGit管理外に、publisher・sandbox launcher・policy・承認鍵を配置します。Rootが書き換えられるrepo内スクリプトをそのまま信頼側サービスの再起動元にしません。
 
 ```sh
-python3 scripts/install-publisher.py \
+python3 .agents/scripts/install-publisher.py \
   --workspace /absolute/requester-workspace \
   --home /absolute/protected-publisher \
   --policy /absolute/reviewed-policy.json

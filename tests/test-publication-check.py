@@ -10,12 +10,12 @@ import sys
 import tempfile
 import unittest
 
-GATE = Path(__file__).resolve().parents[1]/'scripts/publication-check.py'
+GATE = Path(__file__).resolve().parents[1]/'.agents/scripts/publication-check.py'
 
 
 class PublicationTest(unittest.TestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[1]/'tests/test-policy-guard.py')
+        spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[2]/'tests/test-policy-guard.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         self.policy = module.PolicyGuardTest(); self.policy.setUp()
         self.addCleanup(self.policy.doCleanups)

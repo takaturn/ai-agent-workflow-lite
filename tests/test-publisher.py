@@ -16,8 +16,8 @@ import time
 import unittest
 
 BASE = Path(__file__).resolve().parents[1]
-PUBLISHER = BASE/'scripts/publisher.py'
-SANDBOX = BASE/'scripts/publisher-sandbox.py'
+PUBLISHER = BASE/'.agents/scripts/publisher.py'
+SANDBOX = BASE/'.agents/scripts/publisher-sandbox.py'
 
 
 class PublisherTest(unittest.TestCase):
@@ -221,7 +221,7 @@ except OSError:pass
 
     def test_trusted_install_is_external_and_never_overwrites(self):
         home=self.root/'installed'
-        command=[sys.executable,str(BASE/'scripts/install-publisher.py'),'--workspace',str(self.work),
+        command=[sys.executable,str(BASE/'.agents/scripts/install-publisher.py'),'--workspace',str(self.work),
             '--home',str(home),'--policy',str(self.policy)]
         self.assertEqual(subprocess.run(command,capture_output=True).returncode,0)
         key=(home/'approval.key').read_bytes()
@@ -230,7 +230,7 @@ except OSError:pass
         (home/'publisher.py').write_text('different')
         self.assertNotEqual(subprocess.run(command,capture_output=True).returncode,0)
         self.assertEqual((home/'publisher.py').read_text(),'different')
-        unsafe=[sys.executable,str(BASE/'scripts/install-publisher.py'),'--workspace',str(self.work),
+        unsafe=[sys.executable,str(BASE/'.agents/scripts/install-publisher.py'),'--workspace',str(self.work),
             '--home',str(self.work/'unsafe'),'--policy',str(self.policy)]
         self.assertNotEqual(subprocess.run(unsafe,capture_output=True).returncode,0)
         self.assertFalse((self.work/'unsafe').exists())
