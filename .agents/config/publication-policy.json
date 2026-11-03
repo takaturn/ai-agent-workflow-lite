@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "protected_paths": [
+    "AGENTS.md",
+    ".codex",
+    ".claude/settings.json",
+    ".agents/skills",
+    ".agents/config/publication-policy.json",
+    ".agents/scripts/policy-guard.py",
+    ".agents/scripts/install-gitleaks-hook.py",
+    ".agents/scripts/pre-push-gitleaks.py",
+    ".agents/scripts/publication-check.py"
+  ]
+}

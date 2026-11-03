@@ -86,7 +86,7 @@ def main():
         lines = sys.stdin.read().splitlines()
         common = Path(git('rev-parse', '--git-common-dir').decode().strip())
         state = common/'workflow-policy-approvals.json'
-        if state.exists() or Path('config/publication-policy.json').exists():
+        if state.exists() or Path('.agents/config/publication-policy.json').exists():
             guard = common/'hooks/workflow-policy-guard.py'
             result = subprocess.run([sys.executable, str(guard), 'pre-push',
                                      '--remote-name', sys.argv[1],

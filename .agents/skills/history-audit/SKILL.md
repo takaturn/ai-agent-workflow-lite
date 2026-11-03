@@ -7,7 +7,7 @@ description: Read-only audit of local agent history against the repository rules
 
 Search (ctx-agent-history-search) finds sources. This Skill **evaluates** them against rules. A search hit is never a violation by itself. SPEC: Issue #17.
 
-Scope: (a) pin the rule revision in force, (b) **P3** CLI settings / tool selection errors, (c) **P4** call count / budget management. Out of scope: final answer with remaining work (P1) and late child collection (P2), which the Root exit gate (`docs/root-exit-gate.md`) checks at run time; missed Wiki/Issue/PR updates (P5).
+Scope: (a) pin the rule revision in force, (b) **P3** CLI settings / tool selection errors, (c) **P4** call count / budget management. Out of scope: final answer with remaining work (P1) and late child collection (P2), which the Root exit gate (`.agents/docs/root-exit-gate.md`) checks at run time; missed Wiki/Issue/PR updates (P5).
 
 Never do as an implicit part of this Skill: config changes, automatic fixes, child launches, paid comparison runs, external uploads, `ctx import`/daemon/semantic/cloud sync. If extra AI evaluation is needed, state scope and budget and ask.
 
@@ -15,7 +15,7 @@ Never do as an implicit part of this Skill: config changes, automatic fixes, chi
 
 1. **Pin scope** and write it first: `task`, `period` (UTC), `providers`, `roles`, `rule_revision`.
    - Find the checkout the session ran: a HEAD SHA observed in the session or run records (tool output of `git rev-parse`/`git log`, ctx activity facts, summary fields), plus the repository and worktree from ctx metadata. An observed HEAD is sufficient even if the branch name is unknown. A later observed HEAD starts a new span.
-   - Rule paths at that HEAD: start with `AGENTS.md`, `CLAUDE.md`, `README.md`, `.agents/`, `docs/`, `config/`; read them with `git show <head>:<path>` and add any file they reference as a rule (e.g. orchestrate → README role policy, AGENTS.md → workflow docs). Use the final list for every span.
+   - Rule paths at that HEAD: start with `AGENTS.md`, `CLAUDE.md`, `README.md`, `.agents/` (at a HEAD without `.agents/config/`, use the pre-move `docs/`, `config/`, `scripts/`); read them with `git show <head>:<path>` and add any file they reference as a rule (e.g. orchestrate → README role policy, AGENTS.md → workflow docs). Use the final list for every span.
    - A span without an observed HEAD has `rule_revision: unknown`. You may report the `git log --first-parent` candidate on the branch as context, but never read rules from it as the pinned revision.
    - Never substitute the current checkout or working branch. If the revision cannot be pinned, set `rule_revision: unknown`; every finding in that span becomes `unknown`.
 2. **Check evidence coverage** before interpreting searches. `ctx status`/`ctx sources`, and the newest indexed session time and session count for the provider and period (`ctx sql` when available; otherwise timestamps from `ctx search --refresh off` results). Use `--refresh off`.

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 BASE = Path(__file__).resolve().parents[1]
-INSTALL = BASE/'scripts/install-gitleaks-hook.py'
+INSTALL = BASE/'.agents/scripts/install-gitleaks-hook.py'
 
 
 class HookTest(unittest.TestCase):

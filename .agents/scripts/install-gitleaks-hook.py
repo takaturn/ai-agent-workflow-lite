@@ -17,9 +17,16 @@ def approved_previous_hook(common, installed):
         revision = approval['revision']
         if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
             raise ValueError('invalid approval revision')
-        prior = subprocess.check_output(['git', 'show',
-            revision+':scripts/pre-push-gitleaks.py'], stderr=subprocess.PIPE,
-            timeout=10, env=env)
+        prior = subprocess.run(['git', 'show', revision+':.agents/scripts/pre-push-gitleaks.py'],
+                               capture_output=True, timeout=10, env=env)
+        if prior.returncode != 0:
+            # Only a revision without the moved hook (pre-#36 layout) may
+            # supply it from the legacy path, where it was protected.
+            prior = subprocess.check_output(['git', 'show',
+                revision+':scripts/pre-push-gitleaks.py'], stderr=subprocess.PIPE,
+                timeout=10, env=env)
+        else:
+            prior = prior.stdout
         if installed == prior:
             return True
     return False
@@ -32,7 +39,7 @@ def approved_current_hook(common, source):
     if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
         raise ValueError('invalid approval revision')
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
-    approved = subprocess.check_output(['git', 'show', revision+':scripts/pre-push-gitleaks.py'],
+    approved = subprocess.check_output(['git', 'show', revision+':.agents/scripts/pre-push-gitleaks.py'],
                                        stderr=subprocess.PIPE, timeout=10, env=env)
     return source == approved
 
@@ -57,16 +64,16 @@ def main():
             lock = lock_path.open('a')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = common/'workflow-policy-approvals.json'
-        if Path('config/publication-policy.json').exists() and not state.exists():
+        if Path('.agents/config/publication-policy.json').exists() and not state.exists():
             chosen = subprocess.run(['git', 'config', '--get', 'workflow.policyRemote'],
                                     capture_output=True, text=True)
             if chosen.returncode not in (0, 1):
                 raise ValueError('invalid policy remote configuration')
             remote = chosen.stdout.strip() if chosen.returncode == 0 else 'origin'
-            subprocess.run([sys.executable, 'scripts/policy-guard.py', 'bootstrap',
+            subprocess.run([sys.executable, '.agents/scripts/policy-guard.py', 'bootstrap',
                             '--remote-name', remote], check=True,
                            capture_output=True, timeout=60)
-        if state.exists() or Path('config/publication-policy.json').exists():
+        if state.exists() or Path('.agents/config/publication-policy.json').exists():
             subprocess.run([sys.executable, str(common/'hooks/workflow-policy-guard.py'), 'check'],
                            check=True, capture_output=True, timeout=10)
         hook = Path(subprocess.check_output(['git', 'rev-parse', '--git-path',
