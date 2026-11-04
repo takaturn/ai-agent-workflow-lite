@@ -14,7 +14,7 @@
 | `.agents/` | 必須 | `.agents/skills` などに既存資産があれば、同名ファイルを上書きせず差分を確認してマージする |
 | `AGENTS.md` | 必須 | 既存の記述を残し、本リポジトリの規則を追記してマージする |
 | `CLAUDE.md` | Claude Code利用時 | 既存の記述を残し、`AGENTS.md` を参照する1行を追記する |
-| `.claude/settings.json` | Claude Code利用時 | `hooks.PreToolUse` 配列へpolicy guardのentryを追加してマージする。既存のhookは削除しない |
+| `.claude/settings.json` | Claude Code利用時 | `hooks.PreToolUse` 配列へpolicy guardのentryと、`matcher: "Agent"` の委譲手段hookのentryを別々に追加してマージする。既存のhookは削除しない。委譲手段hookは `$CLAUDE_PROJECT_DIR/.agents/skills/orchestrate/scripts/` を実行し、`sh`、`timeout`、`python3` が必要（ないとAgentの呼び出しが毎回確認になる）。`dontAsk` のセッションではAgentを拒否する |
 | `.claude/skills/` | Claude Code利用時 | `.agents/skills/` へのsymlink。同名のskillがあれば上書きせず停止して判断する |
 | `.codex/hooks.json` | Codex利用時 | `hooks.PreToolUse` 配列へpolicy guardのentryを追加してマージする |
 | `.github/ISSUE_TEMPLATE/` | 任意 | 既存テンプレートがあれば上書きしない |
