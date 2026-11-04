@@ -11,6 +11,7 @@
 - Require independent adversarial review for high-impact decisions, including changes to agent authority, launch rules, or evidence standards. Keep static review and executed tests distinct.
 - To choose review depth (NORMAL/FOCUSED/FULL) for a fixed diff, Root reads `.agents/skills/review-depth-router/SKILL.md`. It can only add depth: the mandatory independent review above, launch limits and approvals still apply, and its result grants no Reviewer launch, model tier or merge authority.
 - PR text and GitHub review replies are normally Japanese.
+- When presenting options to the user, mark the one Root recommends and give its concrete reasons alongside the options, not only as a trailing remark.
 - For PR creation or Development link repair on an existing numbered PR, automatically read `.agents/skills/github-pr-creation/SKILL.md`; no explicit skill invocation is needed. Follow its direct-Issue linking and read-back verification rules. Loading the skill does not expand authorization for commit, push, merge, or Issue closure.
 - For PR feedback fixes, replies, and thread resolution, read `.agents/skills/address-pr-feedback/SKILL.md`. Treat push, reply, and resolve as separate steps and verify each before reporting completion.
 - Runtime data is stored outside Git; record design decisions and measured experiments in Wiki, not in agent context.
