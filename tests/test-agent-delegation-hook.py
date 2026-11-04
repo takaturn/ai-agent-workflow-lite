@@ -114,7 +114,8 @@ def main():
         # Wrapper missing: the registered command's own fallback asks.
         shutil.rmtree(Path(tmp) / ".agents")
         assert run(command, payload(subagent_type="Explore"), tmp)["permissionDecision"] == "ask"
-    print(f"agent delegation hook: {len(cases) + 2 * len(fakes) + 2} cases passed")
+        assert run(command, payload(mode="dontAsk", subagent_type="Explore"), tmp)["permissionDecision"] == "deny"
+    print(f"agent delegation hook: {len(cases) + 2 * len(fakes) + 3} cases passed")
 
 
 if __name__ == "__main__":

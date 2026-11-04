@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR/.agents/skills/orchestrate/scripts/agent-delegation-hook.sh\" || printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Agent hookを実行できませんでした。委譲手段の条件は .agents/skills/orchestrate/SKILL.md を参照。\"}}'",
+            "command": "in=$(cat); printf '%s' \"$in\" | sh \"$CLAUDE_PROJECT_DIR/.agents/skills/orchestrate/scripts/agent-delegation-hook.sh\" || case $in in *'\"permission_mode\":\"dontAsk\"'*|*'\"permission_mode\": \"dontAsk\"'*) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Agent hookを実行できませんでした。委譲手段の条件は .agents/skills/orchestrate/SKILL.md を参照。\"}}' ;; *) printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Agent hookを実行できませんでした。委譲手段の条件は .agents/skills/orchestrate/SKILL.md を参照。\"}}' ;; esac",
             "timeout": 10,
             "statusMessage": "Checking delegation method"
           }
