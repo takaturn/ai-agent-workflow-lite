@@ -15,7 +15,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
 - `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
-- `.agents/config/models.json`: light / standard / deep の明示マッピング
+- `.agents/config/models.json`: role（implement / review）ごとの light / standard / deep の明示マッピングと、providerごとの許可effort一覧
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
 `bash tests/test-runner.sh` の成功はモックテストの成功であり、Herdr 実機での Worker 起動・監視・結果回収の成功を意味しません。
@@ -43,6 +43,22 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude> <light|standard|deep> <task-file>` です。既定は `claude` で、`codex` は承認済みproviderとして選ぶ場合に残しています（旧名 `claude-only` は受け付けません）。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
+
+## モデル構成（Issue #43）
+
+`run-agent.sh` は role・provider・tier の組で `models.json` の `roles.<provider>.<role>.<tier>` を選びます。tier はモデル名を含まない用途の名前で、呼び出し側はモデルIDを知りません。
+
+| provider | role | light | standard | deep |
+|---|---|---|---|---|
+| claude | implement | `claude-haiku-5-5` low | `claude-haiku-5-5` high | `claude-opus-5-5` high |
+| claude | review | `claude-haiku-5-5` low | `claude-sonnet-5-5` medium | `claude-opus-5-5` high |
+| codex | implement | `gpt-6-luna` low | `gpt-6.1-terra` medium | `gpt-6.1-sol` high |
+| codex | review | `gpt-6-luna` low | `gpt-6.1-sol` medium | `gpt-6.1-sol` high |
+
+- 未定義の role・tier、model/effort の欠落・空値、`efforts.<provider>` にない effort は、起動予約と Pane 作成より前に失敗します。別の entry やモデルへ黙って切り替えません。Codex の `ultra`（自動でタスクを委譲する）は、再帰委譲をしない規則に合わないため一覧に入れていません。
+- Luna High／Max はどの tier にも入っていません。簡易試験の結果をもとに、light か deep に入れるか、入れないかを決めます。決まるまでは使いません。
+- 普段使い（Root）のモデルはこのリポジトリでは設定しません。各自のユーザー設定で切り替えます（Claude Code: `claude --model claude-opus-5-5 --effort low` または `/model`、Codex: `~/.codex/config.toml` の `model = "gpt-6.1-sol"` と `model_reasoning_effort = "low"`）。保護対象の `.claude/settings.json` や `.codex` は変更しません。適用結果はリポジトリのテストでは確認できません。
+- モデルの提供終了の通知（Anthropic・OpenAI の deprecations ページ）を見たら、`models.json` の該当値を差し替えます。差し替えるまで、該当 tier は起動前に失敗します。launch-gate の承認は provider＋model 単位のため、新しいモデルには新しい承認が必要です。
 
 ## タスク単位の起動ゲート（Issue #16）
 

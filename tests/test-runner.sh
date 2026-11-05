@@ -296,4 +296,66 @@ if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
   echo 'FAIL: in-repo state accepted' >&2; exit 1
 fi
 [[ ! -e "$tmp/work/state" ]] || { echo 'FAIL: rejected state path created files' >&2; exit 1; }
-printf 'PASS: context, delegation, bounded output, external state, refusal\n'
+
+# Issue #43: the same tier resolves per role (claude implement standard is Haiku High).
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-std-writer-args" \
+  bash "$base/.agents/scripts/run-agent.sh" implement claude standard "$tmp/task.txt" >/dev/null 2>&1)
+args=$(sed -n '/^--$/,$p' "$tmp/claude-std-writer-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--model claude-haiku-5-5 --effort high --permission-mode dontAsk --allowedTools '* ]] \
+  || { echo "FAIL: claude implement standard args: $args" >&2; exit 1; }
+XDG_STATE_HOME="$tmp/codex-role" python3 "$base/.agents/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+  --worktree "$tmp/work" approve --approval-ref fixture-codex-role --provider codex --model gpt-6.1-sol \
+  --additional-launches 1 --paths run-agent >/dev/null
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/codex-role" TEST_CAPTURE_START="$tmp/codex-review-args" \
+  bash "$base/.agents/scripts/run-agent.sh" review codex standard "$tmp/task.txt" >/dev/null 2>&1)
+args=$(sed -n '/^--$/,$p' "$tmp/codex-review-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--sandbox read-only -c approval_policy="never" --model gpt-6.1-sol -c model_reasoning_effort=medium ' ]] \
+  || { echo "FAIL: codex review standard args: $args" >&2; exit 1; }
+
+# Invalid model policy fails before any reservation or pane, even when the model is approved.
+mkdir -p "$tmp/badcfg/.agents/config"
+cp -R "$base/.agents/scripts" "$tmp/badcfg/.agents/scripts"
+valid='{"schema_version":2,"efforts":{"codex":["low","medium"]},"roles":{"codex":{"implement":{"light":{"model":"gpt-6-luna","effort":"low"}}}}}'
+bad_cases=(
+  "schema:$(jq -c '.schema_version=1' <<<"$valid")"
+  "legacy:$(jq -c '{profiles:{codex:{light:{model:"gpt-6-luna",effort:"low"}}}}' <<<"$valid")"
+  "no-entry:$(jq -c 'del(.roles.codex.implement.light)' <<<"$valid")"
+  "no-role:$(jq -c 'del(.roles.codex.implement)' <<<"$valid")"
+  "empty-model:$(jq -c '.roles.codex.implement.light.model=""' <<<"$valid")"
+  "bad-model:$(jq -c '.roles.codex.implement.light.model="-x"' <<<"$valid")"
+  "no-effort:$(jq -c 'del(.roles.codex.implement.light.effort)' <<<"$valid")"
+  "empty-effort:$(jq -c '.roles.codex.implement.light.effort=""' <<<"$valid")"
+  "unlisted-effort:$(jq -c '.roles.codex.implement.light.effort="ultra"' <<<"$valid")"
+  "no-effort-list:$(jq -c 'del(.efforts.codex)' <<<"$valid")"
+  "string-effort-list:$(jq -c '.efforts.codex="low medium" | .roles.codex.implement.light.effort="ow"' <<<"$valid")"
+  "numeric-effort:$(jq -c '.efforts.codex=[1] | .roles.codex.implement.light.effort=1' <<<"$valid")"
+  "not-json:{"
+)
+printf '%s\n' "$valid" >"$tmp/badcfg/.agents/config/models.json"
+fixture_policy "$tmp/badcfg-ok"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/badcfg-ok" \
+  bash "$tmp/badcfg/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1) \
+  || { echo 'FAIL: valid copied policy refused' >&2; exit 1; }
+for item in "${bad_cases[@]}"; do
+  label=${item%%:*}
+  printf '%s\n' "${item#*:}" >"$tmp/badcfg/.agents/config/models.json"
+  fixture_policy "$tmp/badcfg-$label"
+  if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/badcfg-$label" TEST_ACTIONS="$tmp/badcfg-$label-actions" \
+    bash "$tmp/badcfg/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/badcfg-$label-error"); then
+    echo "FAIL: invalid model policy accepted: $label" >&2; exit 1
+  fi
+  grep -q 'no valid model for codex implement light' "$tmp/badcfg-$label-error" \
+    || { echo "FAIL: unexpected refusal for $label" >&2; exit 1; }
+  if grep -Eq '^(pane split|agent start)$' "$tmp/badcfg-$label-actions"; then
+    echo "FAIL: child launched for $label" >&2; exit 1
+  fi
+  jq -e '.reservations | length == 0' "$tmp/badcfg-$label/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json" >/dev/null \
+    || { echo "FAIL: reservation made for $label" >&2; exit 1; }
+done
+# Every shipped role/tier resolves to a listed effort.
+for p in codex claude; do for r in implement review; do for t in light standard deep; do
+  jq -e --arg p "$p" --arg r "$r" --arg t "$t" \
+    '.roles[$p][$r][$t] as $e | ($e.model | type == "string" and length > 0) and (.efforts[$p] | index($e.effort)) != null' \
+    "$base/.agents/config/models.json" >/dev/null || { echo "FAIL: shipped policy $p $r $t" >&2; exit 1; }
+done; done; done
+printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy\n'
