@@ -25,14 +25,8 @@ root="$(cd "$root" && pwd -P)" || die 'repository root is inaccessible'
 config="$script_dir/../config/models.json"
 # Fail closed before any state, reservation or pane: role/provider/tier must resolve to a
 # non-empty model and an effort listed for the provider. Never fall back to another entry.
-selection="$(jq -er --arg p "$profile" --arg r "$role" --arg t "$tier" '
-  if .schema_version != 2 then error("unsupported schema") else . end
-  | (.roles[$p][$r][$t] // error("no entry")) as $e
-  | ($e.model | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))) as $m
-  | ($e.effort | strings | select(length > 0)) as $f
-  | (.efforts[$p] | arrays | index($f)) as $i
-  | select($i != null)
-  | "\($m)\t\($f)"' "$config" 2>/dev/null)" || die "no valid model for $profile $role $tier"
+selection="$(jq -er --arg p "$profile" --arg r "$role" --arg t "$tier" \
+  -f "$script_dir/select-model.jq" "$config" 2>/dev/null)" || die "no valid model for $profile $role $tier"
 IFS=$'\t' read -r model effort <<<"$selection"
 [[ -n $model && -n $effort ]] || die "no valid model for $profile $role $tier"
 task="$(cat -- "$task_file")"

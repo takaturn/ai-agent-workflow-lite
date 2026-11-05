@@ -329,6 +329,12 @@ bad_cases=(
   "no-effort-list:$(jq -c 'del(.efforts.codex)' <<<"$valid")"
   "string-effort-list:$(jq -c '.efforts.codex="low medium" | .roles.codex.implement.light.effort="ow"' <<<"$valid")"
   "numeric-effort:$(jq -c '.efforts.codex=[1] | .roles.codex.implement.light.effort=1' <<<"$valid")"
+  "array-effort:$(jq -c '.efforts.codex=[["low"]] | .roles.codex.implement.light.effort=["low"]' <<<"$valid")"
+  "newline-model:$(jq -c '.roles.codex.implement.light.model="gpt-6-luna\n"' <<<"$valid")"
+  "tab-model:$(jq -c '.roles.codex.implement.light.model="gpt\tlow"' <<<"$valid")"
+  "subst-model:$(jq -c '.roles.codex.implement.light.model="$(id)"' <<<"$valid")"
+  "listed-bad-effort:$(jq -c '.efforts.codex=["--x"] | .roles.codex.implement.light.effort="--x"' <<<"$valid")"
+  "listed-newline-effort:$(jq -c '.efforts.codex=["low\n"] | .roles.codex.implement.light.effort="low\n"' <<<"$valid")"
   "not-json:{"
 )
 printf '%s\n' "$valid" >"$tmp/badcfg/.agents/config/models.json"
@@ -351,11 +357,13 @@ for item in "${bad_cases[@]}"; do
   fi
   jq -e '.reservations | length == 0' "$tmp/badcfg-$label/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json" >/dev/null \
     || { echo "FAIL: reservation made for $label" >&2; exit 1; }
+  if compgen -G "$tmp/badcfg-$label/ai-agent-workflow-lite/*/run.*" >/dev/null; then
+    echo "FAIL: run directory created for $label" >&2; exit 1
+  fi
 done
-# Every shipped role/tier resolves to a listed effort.
+# Every shipped role/tier resolves through the same selector run-agent.sh uses.
 for p in codex claude; do for r in implement review; do for t in light standard deep; do
-  jq -e --arg p "$p" --arg r "$r" --arg t "$t" \
-    '.roles[$p][$r][$t] as $e | ($e.model | type == "string" and length > 0) and (.efforts[$p] | index($e.effort)) != null' \
+  jq -er --arg p "$p" --arg r "$r" --arg t "$t" -f "$base/.agents/scripts/select-model.jq" \
     "$base/.agents/config/models.json" >/dev/null || { echo "FAIL: shipped policy $p $r $t" >&2; exit 1; }
 done; done; done
 printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy\n'

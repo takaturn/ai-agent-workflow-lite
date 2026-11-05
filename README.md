@@ -15,6 +15,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
 - `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
+- `.agents/scripts/select-model.jq`: `run-agent.sh` とテストが共有する、role・tier からモデルと effort を選ぶ判定（不正なら何も返さない）
 - `.agents/config/models.json`: role（implement / review）ごとの light / standard / deep の明示マッピングと、providerごとの許可effort一覧
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
