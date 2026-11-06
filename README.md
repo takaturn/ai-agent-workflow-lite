@@ -15,6 +15,7 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
 - `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
+- `.agents/scripts/session-tokens.py`: 子CLIが手元に残すセッション記録から、そのrunのトークン数（Claudeは費用も）を集計して `summary.json` の `token_usage` に入れる。対象のセッションがちょうど1つに決まらなければ `null`
 - `.agents/scripts/select-model.jq`: `run-agent.sh` とテストが共有する、role・tier からモデルと effort を選ぶ判定（不正なら何も返さない）
 - `.agents/config/models.json`: role（implement / review）ごとの light / standard / deep の明示マッピングと、providerごとの許可effort一覧
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
@@ -59,6 +60,7 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 - 未定義の role・tier、model/effort の欠落・空値、`efforts.<provider>` にない effort は、起動予約と Pane 作成より前に失敗します。別の entry やモデルへ黙って切り替えません。Codex の `ultra`（自動でタスクを委譲する）は、再帰委譲をしない規則に合わないため一覧に入れていません。
 - Luna High／Max は**保留**とし、tier には入れていません。簡易試験（[Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-43-Model-Trial)）では受入テストに合格しました。ただし、トークンの取得方法を試験前に決めておらず、単価も確認していないため、費用で比べられていません。判定し直すには、取得方法を先に決め、単価で費用に換算し、複数回試す必要があります。
 - 普段使い（Root）のモデルはこのリポジトリでは設定しません。各自のユーザー設定で切り替えます（Claude Code: `claude --model claude-opus-5-5 --effort low` または `/model`、Codex: `~/.codex/config.toml` の `model = "gpt-6.1-sol"` と `model_reasoning_effort = "low"`）。保護対象の `.claude/settings.json` や `.codex` は変更しません。適用結果はリポジトリのテストでは確認できません。
+- トークン数は、子CLIのセッション記録（Codex: `$CODEX_HOME/sessions` の `token_count`、Claude: `$CLAUDE_CONFIG_DIR/projects` の `cost-state`）から集計し、`summary.json` の `token_usage` に記録します。読むのは数値だけで、本文は保存しません。同じworktreeで同じ時間帯に同じproviderの子が2つ動いた場合など、対象のセッションを1つに決められないときは `null` にします。2つのCLIはキャッシュの数え方が違うため、数値をそのまま比べないでください。Claudeの `cost_usd` はCLIが算出した値で、Codexでは記録されません。
 - モデルの提供終了の通知（Anthropic・OpenAI の deprecations ページ）を見たら、`models.json` の該当値を差し替えます。差し替えるまで、該当 tier は起動前に失敗します。launch-gate の承認は provider＋model 単位のため、新しいモデルには新しい承認が必要です。
 
 ## タスク単位の起動ゲート（Issue #16）

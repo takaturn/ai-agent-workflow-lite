@@ -34,6 +34,15 @@ case "$1 $2" in
   'agent start')
     inspect_phase pane_created
     [[ -z ${TEST_CAPTURE_START:-} ]] || printf '%s\n' "$@" >"$TEST_CAPTURE_START"
+    # Simulate the child CLI writing its own session record when it starts.
+    if [[ -n ${TEST_CODEX_SESSION:-} ]]; then
+      mkdir -p "$CODEX_HOME/sessions/2026/11/07"
+      now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+      jq -cn --arg cwd "$TEST_ROOT" --arg ts "$now" '{type:"session_meta",payload:{timestamp:$ts,cwd:$cwd}}' \
+        >"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
+      jq -cn '{type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:900,cached_input_tokens:400,cache_write_input_tokens:0,output_tokens:50,reasoning_output_tokens:7,total_tokens:950}}}}' \
+        >>"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
+    fi
     exit "${TEST_START_EXIT:-0}" ;;
   'agent prompt')
     inspect_phase prompt_wait
@@ -42,7 +51,7 @@ case "$1 $2" in
     exit "${TEST_PROMPT_EXIT:-0}" ;;
   'agent get')
     jq -n --arg status "${TEST_AGENT_STATUS:-idle}" \
-      '{result:{agent:{agent_status:$status,tokens:{input_tokens:"120",output_tokens:"30"}}}}' ;;
+      '{result:{agent:{agent_status:$status,tokens:(if env.TEST_NO_HERDR_TOKENS == "1" then null else {input_tokens:"120",output_tokens:"30"} end)}}}' ;;
   'agent read')
     inspect_phase prompt_wait
     printf '%s\n' 'result: done' 'changed: none' 'checks: not-run' 'risks: none' 'next: none' ;;
@@ -57,6 +66,8 @@ printf '%s (Claude Code)\n' "${TEST_CLAUDE_VERSION:-2.1.314}"
 MOCK
 chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" TEST_ROOT="$tmp/work" XDG_STATE_HOME="$tmp/state"
+# Never read the developer's real CLI session records during tests.
+export CODEX_HOME="$tmp/codex-home" CLAUDE_CONFIG_DIR="$tmp/claude-home"
 export HERDR_ENV=1 HERDR_PANE_ID=parent
 export LAUNCH_TASK_ID=runner-fixture
 # These are fixture attestations only; no production approval is inferred.
@@ -366,4 +377,14 @@ for p in codex claude; do for r in implement review; do for t in light standard 
   jq -er --arg p "$p" --arg r "$r" --arg t "$t" -f "$base/.agents/scripts/select-model.jq" \
     "$base/.agents/config/models.json" >/dev/null || { echo "FAIL: shipped policy $p $r $t" >&2; exit 1; }
 done; done; done
-printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy\n'
+# Issue #43: token usage comes from the child's own session record when Herdr has none.
+summary_tokens=$(jq -c '.token_usage' "$summary")
+[[ $summary_tokens == null ]] || { echo "FAIL: token usage without a session record: $summary_tokens" >&2; exit 1; }
+fixture_policy "$tmp/tokens"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens" TEST_CODEX_SESSION=1 TEST_NO_HERDR_TOKENS=1 \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1)
+tsum=$(find "$tmp/tokens" -name summary.json -type f | head -n1)
+jq -e '.token_usage == {source:"codex-session",input_tokens:500,cache_read_tokens:400,cache_write_tokens:0,output_tokens:50,reasoning_tokens:7,total_tokens:950,cost_usd:null}
+  and .input_tokens == 500 and .output_tokens == 50' "$tsum" >/dev/null \
+  || { echo "FAIL: session token usage not recorded: $(jq -c '{input_tokens,output_tokens,token_usage}' "$tsum")" >&2; exit 1; }
+printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy, token usage\n'
