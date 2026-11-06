@@ -57,7 +57,7 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 | codex | review | `gpt-6-luna` low | `gpt-6.1-sol` medium | `gpt-6.1-sol` high |
 
 - 未定義の role・tier、model/effort の欠落・空値、`efforts.<provider>` にない effort は、起動予約と Pane 作成より前に失敗します。別の entry やモデルへ黙って切り替えません。Codex の `ultra`（自動でタスクを委譲する）は、再帰委譲をしない規則に合わないため一覧に入れていません。
-- Luna High／Max はどの tier にも入っていません。簡易試験の結果をもとに、light か deep に入れるか、入れないかを決めます。決まるまでは使いません。
+- Luna High／Max はどの tier にも入れていません。簡易試験（[Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-43-Model-Trial)）では受入テストに合格しましたが、所要時間は Terra Medium より長く、トークン数は記録できませんでした。消費を抑える根拠がないため、Issue #43 の仕様9に従い採用しません。
 - 普段使い（Root）のモデルはこのリポジトリでは設定しません。各自のユーザー設定で切り替えます（Claude Code: `claude --model claude-opus-5-5 --effort low` または `/model`、Codex: `~/.codex/config.toml` の `model = "gpt-6.1-sol"` と `model_reasoning_effort = "low"`）。保護対象の `.claude/settings.json` や `.codex` は変更しません。適用結果はリポジトリのテストでは確認できません。
 - モデルの提供終了の通知（Anthropic・OpenAI の deprecations ページ）を見たら、`models.json` の該当値を差し替えます。差し替えるまで、該当 tier は起動前に失敗します。launch-gate の承認は provider＋model 単位のため、新しいモデルには新しい承認が必要です。
 
