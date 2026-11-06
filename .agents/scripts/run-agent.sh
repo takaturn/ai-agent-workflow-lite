@@ -50,6 +50,8 @@ run_id=${run_dir##*/}
 task_sha256=$(printf '%s' "$task" | sha256sum)
 task_sha256=${task_sha256%% *}
 started="$(date +%s)"
+# Sub-second start for session attribution; a whole-second value could admit an earlier session.
+started_epoch="$(date +%s.%N)"
 status=running
 phase=initialized
 child_pane=
@@ -67,13 +69,13 @@ save_summary() {
     --arg task_sha256 "$task_sha256" --arg phase "$phase" \
     --arg task_id "$LAUNCH_TASK_ID" --arg reservation_id "$reservation_id" \
     --argjson exit_code "$code" --argjson duration_seconds "$elapsed" \
-    --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" --argjson token_usage "$token_usage" \
+    --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" --argjson token_usage "$token_usage" --argjson started_epoch "$started_epoch" \
     '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,agent_name:$agent_name,
       run_id:$run_id,parent_pane_id:$parent,worktree:$cwd,task_sha256:$task_sha256,
       task_id:$task_id,reservation_id:$reservation_id,
       phase:$phase,root_acceptance:"pending",cleanup:"retained",close_attempted:false,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
-      input_tokens:$input_tokens,output_tokens:$output_tokens,token_usage:$token_usage}' >"$run_dir/.summary.tmp" || return 1
+      input_tokens:$input_tokens,output_tokens:$output_tokens,token_usage:$token_usage,started_epoch:$started_epoch}' >"$run_dir/.summary.tmp" || return 1
   mv -- "$run_dir/.summary.tmp" "$run_dir/summary.json"
 }
 checkpoint() { save_summary null || die 'cannot record run checkpoint'; }
@@ -192,12 +194,9 @@ case "$agent_status" in
 esac
 herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
 # Aggregate counts only, from the child CLI's own session record; null when not exactly one match.
-token_usage="$(python3 "$script_dir/session-tokens.py" --provider "$profile" --cwd "$root" --since "$started" 2>/dev/null)" || token_usage=null
-jq -e 'type == "object" or . == null' >/dev/null 2>&1 <<<"$token_usage" || token_usage=null
-if [[ $input_tokens == null && $output_tokens == null && $token_usage != null ]]; then
-  input_tokens="$(jq -c '.input_tokens' <<<"$token_usage")"
-  output_tokens="$(jq -c '.output_tokens' <<<"$token_usage")"
-fi
+# Codex records totals while running; Claude writes cost-state at exit, so finish-agent.sh retries after close.
+token_usage="$(timeout 10 python3 "$script_dir/session-tokens.py" --provider "$profile" --cwd "$root" --since "$started_epoch" 2>/dev/null)" || token_usage=null
+jq -e 'type == "object"' >/dev/null 2>&1 <<<"$token_usage" || token_usage=null
 phase=result_collected
 status=returned
 checkpoint

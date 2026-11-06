@@ -101,4 +101,21 @@ update retained "$note" attempt
 herdr pane close "$pane" || printf 'finish-agent: close reply failed; checking layout\n' >&2
 layout_ok || die 'cleanup unverified; accepted result retained in summary'
 update closed "$note"
+# Claude writes its session cost-state when it exits, which is after close. Best effort, never fatal.
+if jq -e '.token_usage == null and (.started_epoch | type == "number") and (.profile == "codex" or .profile == "claude")' "$summary" >/dev/null 2>&1; then
+  profile=$(jq -r '.profile' "$summary"); since=$(jq -r '.started_epoch' "$summary")
+  for _ in 1 2 3 4 5; do
+    usage=$(timeout 10 python3 "$base/session-tokens.py" --provider "$profile" --cwd "$cwd" --since "$since" 2>/dev/null) || usage=null
+    if jq -e 'type == "object"' >/dev/null 2>&1 <<<"$usage"; then
+      temporary=$(mktemp "$(dirname "$summary")/.tokens.XXXXXXXX") || break
+      if jq --argjson usage "$usage" '.token_usage=$usage' "$summary" >"$temporary"; then
+        mv -- "$temporary" "$summary" || rm -f -- "$temporary"
+      else
+        rm -f -- "$temporary"
+      fi
+      break
+    fi
+    sleep 1
+  done
+fi
 printf 'Root accepted and cleanup verified: run_id=%s pane=%s summary=%s\n' "$run_id" "$pane" "$summary"

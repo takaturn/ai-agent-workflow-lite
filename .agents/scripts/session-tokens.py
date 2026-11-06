@@ -3,14 +3,26 @@
 
 Reads only the CLI's own local session records and prints counts, never
 content. Prints "null" unless exactly one session matches the worktree and
-started at or after --since, so an ambiguous or missing match is unavailable
-rather than guessed.
+started within START_WINDOW seconds after --since. Any unreadable, oversized
+or malformed candidate also makes the result null, so an ambiguous or missing
+match is unavailable rather than guessed. Nothing proves the match is this
+run's child: a second same-provider session started in the same worktree in
+that window makes the result null, but a missing child record cannot be told
+apart from someone else's.
 """
 import argparse
 import datetime
 import json
+import math
 import os
 from pathlib import Path
+
+START_WINDOW = 120
+MAX_BYTES = 64 * 1024 * 1024
+
+
+class Ambiguous(Exception):
+    """A candidate could not be inspected safely; the run's usage is unavailable."""
 
 
 def counter(value):
@@ -18,7 +30,9 @@ def counter(value):
 
 
 def records(path):
-    with open(path, encoding="utf-8") as handle:
+    if path.stat().st_size > MAX_BYTES:
+        raise Ambiguous("oversized record")
+    with open(path, encoding="utf-8", errors="strict") as handle:
         for line in handle:
             try:
                 item = json.loads(line)
@@ -35,6 +49,10 @@ def epoch(text):
         return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def in_window(started, since):
+    return started is not None and since <= started <= since + START_WINDOW
 
 
 def recent(base, pattern, since):
@@ -55,7 +73,11 @@ def codex(cwd, since):
     matches = []
     for path in recent(home / "sessions", "**/rollout-*.jsonl", since):
         meta, usage = None, None
-        for item in records(path):
+        try:
+            items = list(records(path))
+        except Exception as error:
+            raise Ambiguous("unreadable candidate") from error
+        for item in items:
             payload = item.get("payload")
             if not isinstance(payload, dict):
                 continue
@@ -66,7 +88,7 @@ def codex(cwd, since):
                 if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
                     usage = info["total_token_usage"]
         started = epoch(meta.get("timestamp")) if meta else None
-        if meta and meta.get("cwd") == cwd and started is not None and started >= since:
+        if meta and meta.get("cwd") == cwd and in_window(started, since):
             matches.append(usage)
     if len(matches) != 1 or matches[0] is None:
         return None
@@ -90,7 +112,11 @@ def claude(cwd, since):
     matches = []
     for path in recent(home / "projects", "*/*.jsonl", since):
         session_cwd, cost = None, None
-        for item in records(path):
+        try:
+            items = list(records(path))
+        except Exception as error:
+            raise Ambiguous("unreadable candidate") from error
+        for item in items:
             if session_cwd is None and isinstance(item.get("cwd"), str):
                 session_cwd = item["cwd"]
             if item.get("type") == "cost-state":
@@ -98,7 +124,7 @@ def claude(cwd, since):
         if session_cwd != cwd:
             continue
         start = cost.get("startTime") if cost else None
-        if counter(start) is None or start / 1000 < since:
+        if counter(start) is None or not in_window(start / 1000, since):
             continue
         matches.append(cost)
     if len(matches) != 1:
@@ -117,7 +143,8 @@ def claude(cwd, since):
     result["total_tokens"] = None if None in parts else sum(parts)
     cost_usd = matches[0].get("totalCostUSD")
     known = matches[0].get("hasUnknownModelCost") is False
-    result["cost_usd"] = cost_usd if known and isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool) and cost_usd >= 0 else None
+    numeric = isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
+    result["cost_usd"] = cost_usd if known and numeric and math.isfinite(cost_usd) and cost_usd >= 0 else None
     return result if result["total_tokens"] is not None else None
 
 
@@ -129,7 +156,7 @@ def main():
     args = parser.parse_args()
     try:
         result = (codex if args.provider == "codex" else claude)(args.cwd, args.since)
-    except (OSError, UnicodeDecodeError):
+    except Exception:  # never let accounting break or stall the runner; null means unavailable
         result = None
     print(json.dumps(result, sort_keys=True))
 

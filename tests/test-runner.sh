@@ -37,7 +37,7 @@ case "$1 $2" in
     # Simulate the child CLI writing its own session record when it starts.
     if [[ -n ${TEST_CODEX_SESSION:-} ]]; then
       mkdir -p "$CODEX_HOME/sessions/2026/11/07"
-      now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+      now=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
       jq -cn --arg cwd "$TEST_ROOT" --arg ts "$now" '{type:"session_meta",payload:{timestamp:$ts,cwd:$cwd}}' \
         >"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
       jq -cn '{type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:900,cached_input_tokens:400,cache_write_input_tokens:0,output_tokens:50,reasoning_output_tokens:7,total_tokens:950}}}}' \
@@ -385,6 +385,16 @@ fixture_policy "$tmp/tokens"
   bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1)
 tsum=$(find "$tmp/tokens" -name summary.json -type f | head -n1)
 jq -e '.token_usage == {source:"codex-session",input_tokens:500,cache_read_tokens:400,cache_write_tokens:0,output_tokens:50,reasoning_tokens:7,total_tokens:950,cost_usd:null}
-  and .input_tokens == 500 and .output_tokens == 50' "$tsum" >/dev/null \
+  and .input_tokens == null and .output_tokens == null and (.started_epoch | type == "number")' "$tsum" >/dev/null \
   || { echo "FAIL: session token usage not recorded: $(jq -c '{input_tokens,output_tokens,token_usage}' "$tsum")" >&2; exit 1; }
+# Claude writes cost-state only at exit, so collection time records null and finish-agent.sh retries.
+claude_policy "$tmp/tokens-claude"
+mkdir -p "$CLAUDE_CONFIG_DIR/projects/p"
+printf '%s\n' "{\"type\":\"user\",\"cwd\":\"$tmp/work\"}" >"$CLAUDE_CONFIG_DIR/projects/p/live.jsonl"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens-claude" \
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
+csum=$(find "$tmp/tokens-claude" -name summary.json -type f | head -n1)
+jq -e '.status == "returned" and .token_usage == null' "$csum" >/dev/null \
+  || { echo 'FAIL: claude usage recorded before exit' >&2; exit 1; }
+python3 "$base/tests/test-session-tokens.py" >/dev/null 2>&1 || { echo 'FAIL: session-tokens unit tests' >&2; exit 1; }
 printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy, token usage\n'

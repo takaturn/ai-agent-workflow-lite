@@ -14,7 +14,8 @@ CWD = "/work/tree"
 
 
 def iso(epoch):
-    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(epoch))
+    # Keep milliseconds like real records; truncating to seconds made start-window cases flaky.
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(epoch)) + ".%03dZ" % int((epoch % 1) * 1000)
 
 
 class SessionTokens(unittest.TestCase):
@@ -101,6 +102,35 @@ class SessionTokens(unittest.TestCase):
         self.assertIsNone(self.run_helper("claude")["cost_usd"])
         self.claude_session("q")
         self.assertIsNone(self.run_helper("claude"))                       # ambiguous
+
+    def test_start_must_fall_in_window(self):
+        self.codex_session("early", started=self.since - 0.5)              # same second, just before the run
+        self.codex_session("late", started=self.since + 121)               # outside the child start window
+        self.assertIsNone(self.run_helper("codex"))
+        self.codex_session("ok", started=self.since + 0.5)
+        self.assertEqual(self.run_helper("codex")["total_tokens"], 950)
+
+    def test_unsafe_candidates_make_result_null(self):
+        self.codex_session("a")
+        bad = self.home / "codex/sessions/2026/11/07/rollout-bad.jsonl"
+        bad.write_bytes(b"\xff\xfe not utf-8\n")                        # invalid UTF-8
+        self.assertIsNone(self.run_helper("codex"))
+        bad.unlink()
+        big = self.home / "codex/sessions/2026/11/07/rollout-big.jsonl"
+        with open(big, "wb") as handle:                                   # sparse, cheap to create
+            handle.truncate(65 * 1024 * 1024)
+        self.assertIsNone(self.run_helper("codex"))
+        big.unlink()
+        if os.geteuid() != 0:
+            locked = self.codex_session("locked")
+            locked.chmod(0)
+            self.assertIsNone(self.run_helper("codex"))
+            locked.chmod(0o600)
+
+    def test_claude_non_finite_cost_is_dropped(self):
+        path = self.claude_session("p")
+        path.write_text(path.read_text().replace('"totalCostUSD": 0.5', '"totalCostUSD": Infinity'), encoding="utf-8")
+        self.assertIsNone(self.run_helper("claude")["cost_usd"])
 
     def test_claude_missing_counter_is_unavailable(self):
         self.claude_session("p", usage={"a": {"inputTokens": 10, "outputTokens": "20"}})
