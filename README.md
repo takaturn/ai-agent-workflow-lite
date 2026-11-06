@@ -54,11 +54,11 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 |---|---|---|---|---|
 | claude | implement | `claude-haiku-5-5` low | `claude-haiku-5-5` high | `claude-opus-5-5` high |
 | claude | review | `claude-haiku-5-5` low | `claude-sonnet-5-5` medium | `claude-opus-5-5` high |
-| codex | implement | `gpt-6-luna` low | `gpt-6.1-terra` medium | `gpt-6.1-sol` high |
+| codex | implement | `gpt-6-luna` low | `gpt-6-luna` high | `gpt-6.1-sol` high |
 | codex | review | `gpt-6-luna` low | `gpt-6.1-sol` medium | `gpt-6.1-sol` high |
 
 - 未定義の role・tier、model/effort の欠落・空値、`efforts.<provider>` にない effort は、起動予約と Pane 作成より前に失敗します。別の entry やモデルへ黙って切り替えません。Codex の `ultra`（自動でタスクを委譲する）は、再帰委譲をしない規則に合わないため一覧に入れていません。
-- Luna High／Max は**保留**とし、tier には入れていません。簡易試験（[Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-43-Model-Trial)）では受入テストに合格しました。ただし、トークンの取得方法を試験前に決めておらず、単価も確認していないため、費用で比べられていません。判定し直すには、取得方法を先に決め、単価で費用に換算し、複数回試す必要があります。
+- Codex の開発の standard は Luna High です。Issue #43 の再試験（[Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-43-Model-Trial)）では、Terra Medium・Luna High・Luna Max の3構成を各2回試し、全回合格しました。Luna High の費用（API 換算）は Terra Medium の約2分の1〜5分の1で、所要時間は約1.7倍でした。Luna Max は Luna High より費用・時間ともに大きく、採用していません。試験は小さなタスク1種類だけなので、難しい作業では deep（Sol High）を使ってください。
 - 普段使い（Root）のモデルはこのリポジトリでは設定しません。各自のユーザー設定で切り替えます（Claude Code: `claude --model claude-opus-5-5 --effort low` または `/model`、Codex: `~/.codex/config.toml` の `model = "gpt-6.1-sol"` と `model_reasoning_effort = "low"`）。保護対象の `.claude/settings.json` や `.codex` は変更しません。適用結果はリポジトリのテストでは確認できません。
 - トークン数は、子CLIのセッション記録（Codex: `$CODEX_HOME/sessions` の `token_count`、Claude: `$CLAUDE_CONFIG_DIR/projects` の `cost-state`）から集計し、`summary.json` の `token_usage` に記録します。読むのは数値だけで、本文は保存しません。
   - 対象は、同じworktreeで、runの開始から120秒以内に始まったセッションです。それがちょうど1つで、読めないファイルや大きすぎるファイル（64MB超）がない場合だけ記録します。決められなければ `null` です。
