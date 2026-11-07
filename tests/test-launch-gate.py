@@ -220,6 +220,9 @@ class LaunchGateTest(unittest.TestCase):
         code, output = self.approve_plan("plan", plan, answer=digest[:8])
         self.assertNotEqual(code, 0, output)
         self.assertIn("already used", output)
+        # An interrupted append (no trailing newline) does not block completing the record.
+        log.write_text(log.read_text() + '{"plan_sha256": "trunc')
+        self.assertIn("already used", self.approve_plan("plan", plan, answer=digest[:8])[1])
         # Even without the provenance log, deterministic references never double count.
         log.unlink()
         code, output = self.approve_plan("plan", plan, answer=digest[:8])

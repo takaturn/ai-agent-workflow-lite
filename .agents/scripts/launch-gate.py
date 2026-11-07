@@ -228,7 +228,10 @@ def used_plans(log_file):
         fail("plan confirmation log must not be a symlink")
     result = set()
     with log_file.open("r", encoding="utf-8") as stream:
-        for line in stream:
+        lines = stream.read().split("\n")
+        # The last element is "" after a complete record; anything else is an
+        # interrupted append and is ignored so a retry can complete it.
+        for line in lines[:-1]:
             entry = json.loads(line, object_pairs_hook=unique_object)
             if not isinstance(entry, dict) or not isinstance(entry.get("plan_sha256"), str):
                 fail("invalid plan confirmation log")
@@ -324,6 +327,8 @@ def run(args):
                 validate(data, args.task_id)
                 write_atomic(state_file, data)
             with log_stream as stream:
+                if stream.tell() and not log_file.read_bytes().endswith(b"\n"):
+                    stream.write("\n")
                 stream.write(json.dumps({"plan_sha256": digest, "confirmed_at": now(),
                                          "source": "terminal_confirmation", "approval_refs": refs},
                                         sort_keys=True) + "\n")
