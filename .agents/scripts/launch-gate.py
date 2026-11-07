@@ -205,20 +205,14 @@ def read_plan(path, worktree, task_id):
     return raw, plan, total
 
 
-def confirm_plan(plan, digest, total):
+def show_plan(plan, digest, total):
     print("Launch approval plan (normalized):")
     print(json.dumps(plan, indent=2, sort_keys=True))
     print("plan sha256: " + digest)
     for item in plan["launches"]:
         print(f"  >> {item['provider']} / {item['model']}: {item['count']} launches (path run-agent)")
     print(f"  >> TOTAL: {total} launches for task {plan['task_id']}")
-    if not sys.stdin.isatty():
-        fail("confirmation requires an interactive terminal; nothing recorded")
-    sys.stdout.write("Type ONLY the first 8 characters of the plan sha256 (e.g. " + "x" * 8 + ") to record: ")
-    sys.stdout.flush()
-    answer = sys.stdin.readline().strip()
-    if answer != digest[:8]:
-        fail("confirmation mismatch; nothing recorded")
+    print("To record after reading the plan above, run:  --confirm " + digest[:8])
 
 
 def used_plans(log_file):
@@ -255,12 +249,16 @@ def run(args):
     if state_file.is_symlink():
         fail("task state file must not be a symlink")
     log_file = task_dir / PLAN_LOG
-    if args.command == "approve-plan":
+    if args.command in ("show-plan", "approve-plan"):
         raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
         digest = hashlib.sha256(raw).hexdigest()
         if digest in used_plans(log_file):
             fail("plan already used; write a new plan for additional launches")
-        confirm_plan(plan, digest, plan_total)
+        if args.command == "show-plan":
+            show_plan(plan, digest, plan_total)
+            return
+        if not re.fullmatch(r"[0-9a-f]{8}", args.confirm or "") or args.confirm != digest[:8]:
+            fail("--confirm must be the first 8 characters of the plan sha256 shown by show-plan; nothing recorded")
     with open(task_dir / ".lock", "a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if state_file.exists():
@@ -386,8 +384,11 @@ def main():
     approve.add_argument("--model", required=True)
     approve.add_argument("--additional-launches", type=int, required=True)
     approve.add_argument("--paths", nargs="+", choices=PATHS, required=True)
-    plan = sub.add_parser("approve-plan", help="show a launch plan, require terminal confirmation, record all pairs at once")
+    show = sub.add_parser("show-plan", help="display a launch plan and its sha256 without recording")
+    show.add_argument("--plan", required=True, help="absolute path to a 0600 plan JSON outside the worktree")
+    plan = sub.add_parser("approve-plan", help="record all pairs of a plan shown by show-plan, at once")
     plan.add_argument("--plan", required=True, help="absolute path to a 0600 plan JSON outside the worktree")
+    plan.add_argument("--confirm", required=True, help="first 8 characters of the sha256 printed by show-plan")
     reserve = sub.add_parser("reserve")
     reserve.add_argument("--provider", required=True)
     reserve.add_argument("--model", required=True)

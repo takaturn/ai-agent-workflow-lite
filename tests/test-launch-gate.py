@@ -4,8 +4,6 @@ import concurrent.futures
 import hashlib
 import json
 import os
-import pty
-import select
 from pathlib import Path
 import subprocess
 import tempfile
@@ -171,43 +169,26 @@ class LaunchGateTest(unittest.TestCase):
         return path, hashlib.sha256(raw).hexdigest()
 
     def approve_plan(self, task, plan, answer=None):
-        command = ["python3", str(GATE), "--task-id", task, "--worktree", self.worktree,
-                   "approve-plan", "--plan", str(plan)]
+        """show-plan when answer is None, else approve-plan --confirm answer."""
+        extra = ["show-plan", "--plan", str(plan)] if answer is None else \
+            ["approve-plan", "--plan", str(plan), "--confirm", answer]
+        result = subprocess.run(["python3", str(GATE), "--task-id", task, "--worktree", self.worktree, *extra],
+                                env=self.env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
         if answer is None:
-            return subprocess.run(command, env=self.env, text=True, capture_output=True,
-                                  stdin=subprocess.DEVNULL)
-        master, slave = pty.openpty()
-        proc = subprocess.Popen(command, env=self.env, stdin=slave, stdout=slave, stderr=slave)
-        os.close(slave)
-        output = b""
-        sent = False
-        while True:
-            ready, _, _ = select.select([master], [], [], 10)
-            if not ready:
-                break
-            try:
-                chunk = os.read(master, 4096)
-            except OSError:
-                break
-            if not chunk:
-                break
-            output += chunk
-            if not sent and b"to record:" in output:
-                os.write(master, answer.encode() + b"\n")
-                sent = True
-        os.close(master)
-        proc.wait(10)
-        return proc.returncode, output.decode()
+            return result
+        return result.returncode, result.stdout + result.stderr
 
     def test_plan_confirmation_records_all_pairs_once(self):
         plan, digest = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
         result = self.approve_plan("plan", plan)
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(digest, result.stdout)
+        self.assertIn("--confirm " + digest[:8], result.stdout)
         self.assertIn("TOTAL: 3", result.stdout)
         self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
-        code, output = self.approve_plan("plan", plan, answer="00000000")
-        self.assertNotEqual(code, 0, output)
+        for wrong in ("00000000", digest, ""):
+            code, output = self.approve_plan("plan", plan, answer=wrong)
+            self.assertNotEqual(code, 0, output)
         self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
         code, output = self.approve_plan("plan", plan, answer=digest[:8])
         self.assertEqual(code, 0, output)
