@@ -19,6 +19,7 @@ ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 PLAN_LIMIT = 20
 PLAN_MAX_BYTES = 65536
 PLAN_LOG = "plan-confirmations.jsonl"
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}\Z")
 
 
 def fail(message):
@@ -163,11 +164,12 @@ def read_plan(path, worktree, task_id):
     plan_path = Path(path)
     if not plan_path.is_absolute():
         fail("plan path must be absolute")
-    resolved = plan_path.resolve()
-    if resolved == worktree or worktree in resolved.parents:
-        fail("plan file must be outside the worktree")
     fd = os.open(plan_path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
+        # Check the location of the file actually opened, not of a path that may change.
+        opened = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        if opened == worktree or worktree in opened.parents:
+            fail("plan file must be outside the worktree")
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
             fail("plan file must be a regular file owned by the current user")
@@ -190,7 +192,7 @@ def read_plan(path, worktree, task_id):
     for item in launches:
         if not isinstance(item, dict) or set(item) != {"provider", "model", "count"}:
             fail("plan launch must contain exactly provider, model, count")
-        if not all(isinstance(item[k], str) and item[k].strip() == item[k] and item[k] for k in ("provider", "model")):
+        if not all(isinstance(item[k], str) and NAME.fullmatch(item[k]) for k in ("provider", "model")):
             fail("invalid plan provider/model")
         if type(item["count"]) is not int or item["count"] <= 0:
             fail("plan count must be a positive integer")
@@ -205,14 +207,14 @@ def read_plan(path, worktree, task_id):
 
 def confirm_plan(plan, digest, total):
     print("Launch approval plan (normalized):")
-    print(json.dumps(plan, indent=2, sort_keys=True, ensure_ascii=False))
+    print(json.dumps(plan, indent=2, sort_keys=True))
     print("plan sha256: " + digest)
     for item in plan["launches"]:
         print(f"  >> {item['provider']} / {item['model']}: {item['count']} launches (path run-agent)")
     print(f"  >> TOTAL: {total} launches for task {plan['task_id']}")
     if not sys.stdin.isatty():
         fail("confirmation requires an interactive terminal; nothing recorded")
-    sys.stdout.write("Type the first 8 characters of the plan sha256 to record: ")
+    sys.stdout.write("Type ONLY the first 8 characters of the plan sha256 (e.g. " + "x" * 8 + ") to record: ")
     sys.stdout.flush()
     answer = sys.stdin.readline().strip()
     if answer != digest[:8]:
@@ -311,23 +313,22 @@ def run(args):
                     "provider": item["provider"], "model": item["model"], "paths": ["run-agent"],
                     "additional_launches": item["count"]})
                 added += item["count"]
+            if log_file.is_symlink():
+                fail("plan confirmation log must not be a symlink")
+            # Open the provenance log before touching state so an unwritable log records nothing.
+            log_fd = os.open(log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            log_stream = os.fdopen(log_fd, "a", encoding="utf-8")
             if added:
                 if data["stop"]["reason"] == "limit_reached":
                     data["stop"] = {"reason": None, "at": None}
                 validate(data, args.task_id)
                 write_atomic(state_file, data)
-            if log_file.is_symlink():
-                fail("plan confirmation log must not be a symlink")
-            with open(log_file, "a", encoding="utf-8") as stream:
+            with log_stream as stream:
                 stream.write(json.dumps({"plan_sha256": digest, "confirmed_at": now(),
                                          "source": "terminal_confirmation", "approval_refs": refs},
                                         sort_keys=True) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            try:
-                os.replace(args.plan, args.plan + ".used")
-            except OSError:
-                pass
             print(json.dumps({"task_id": args.task_id, "allowance": total + added,
                               "used": len(data["reservations"]), "approval_recorded": bool(added),
                               "plan_sha256": digest}))

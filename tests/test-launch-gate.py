@@ -213,7 +213,6 @@ class LaunchGateTest(unittest.TestCase):
         self.assertEqual(code, 0, output)
         data = self.status("plan")
         self.assertEqual([a["reference"] for a in data["approvals"]], [digest[:16] + "-1", digest[:16] + "-2"])
-        self.assertFalse(plan.exists())
         log = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/plan-confirmations.jsonl"
         self.assertEqual(json.loads(log.read_text())["plan_sha256"], digest)
         # A restored copy of a used plan is refused before prompting.
@@ -244,6 +243,28 @@ class LaunchGateTest(unittest.TestCase):
         self.assertIn("exceeds limit", output)
         plan, digest = self.write_plan("mode", [("fixture-model", 1)], name="mode.json", mode=0o644)
         self.assertNotEqual(self.approve_plan("mode", plan).returncode, 0)
+        # Terminal control characters in a model name are rejected before display.
+        plan, digest = self.write_plan("ctrl", [("fixture-model\x1b[2J", 1)], name="ctrl.json")
+        result = self.approve_plan("ctrl", plan)
+        self.assertNotIn("\x1b", result.stdout)
+        self.assertIn("invalid plan provider/model", result.stderr)
+        # A plan reached through a symlinked parent inside the worktree is rejected.
+        inside = Path(self.worktree) / "plan.json"
+        inside.write_bytes(plan.read_bytes().replace(b"\\u001b[2J", b""))
+        inside.chmod(0o600)
+        link = Path(self.tmp.name) / "plans/link"
+        link.symlink_to(self.worktree)
+        self.assertIn("outside the worktree", self.approve_plan("ctrl", link / "plan.json").stderr)
+        # An unwritable provenance log prevents any state write.
+        plan, digest = self.write_plan("log", [("fixture-model", 1)], name="log.json")
+        task_dir = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/log"
+        task_dir.mkdir(parents=True)
+        log = task_dir / "plan-confirmations.jsonl"
+        log.write_text("")
+        log.chmod(0o400)
+        code, output = self.approve_plan("log", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse((task_dir / "state.json").exists())
 
     def test_legacy_state_fixture_still_reserves(self):
         state = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/legacy/state.json"
