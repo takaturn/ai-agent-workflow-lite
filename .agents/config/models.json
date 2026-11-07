@@ -1,32 +1,32 @@
 {
-  "schema_version": 1,
-  "profiles": {
+  "schema_version": 2,
+  "efforts": {
+    "codex": ["low", "medium", "high", "xhigh", "max"],
+    "claude": ["low", "medium", "high", "xhigh", "max"]
+  },
+  "roles": {
     "codex": {
-      "light": {
-        "model": "gpt-6-luna",
-        "effort": "low"
+      "implement": {
+        "light": { "model": "gpt-6-luna", "effort": "low" },
+        "standard": { "model": "gpt-6-luna", "effort": "high" },
+        "deep": { "model": "gpt-6.1-sol", "effort": "high" }
       },
-      "standard": {
-        "model": "gpt-6-sol",
-        "effort": "medium"
-      },
-      "deep": {
-        "model": "gpt-6-sol",
-        "effort": "high"
+      "review": {
+        "light": { "model": "gpt-6-luna", "effort": "low" },
+        "standard": { "model": "gpt-6.1-sol", "effort": "medium" },
+        "deep": { "model": "gpt-6.1-sol", "effort": "high" }
       }
     },
     "claude": {
-      "light": {
-        "model": "claude-haiku-5-5",
-        "effort": "low"
+      "implement": {
+        "light": { "model": "claude-haiku-5-5", "effort": "low" },
+        "standard": { "model": "claude-haiku-5-5", "effort": "high" },
+        "deep": { "model": "claude-opus-5-5", "effort": "high" }
       },
-      "standard": {
-        "model": "claude-sonnet-5-5",
-        "effort": "medium"
-      },
-      "deep": {
-        "model": "claude-opus-5-5",
-        "effort": "high"
+      "review": {
+        "light": { "model": "claude-haiku-5-5", "effort": "low" },
+        "standard": { "model": "claude-sonnet-5-5", "effort": "medium" },
+        "deep": { "model": "claude-opus-5-5", "effort": "high" }
       }
     }
   }

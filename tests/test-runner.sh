@@ -34,6 +34,15 @@ case "$1 $2" in
   'agent start')
     inspect_phase pane_created
     [[ -z ${TEST_CAPTURE_START:-} ]] || printf '%s\n' "$@" >"$TEST_CAPTURE_START"
+    # Simulate the child CLI writing its own session record when it starts.
+    if [[ -n ${TEST_CODEX_SESSION:-} ]]; then
+      mkdir -p "$CODEX_HOME/sessions/2026/11/07"
+      now=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+      jq -cn --arg cwd "$TEST_ROOT" --arg ts "$now" '{type:"session_meta",payload:{timestamp:$ts,cwd:$cwd}}' \
+        >"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
+      jq -cn '{type:"event_msg",payload:{type:"token_count",info:{total_token_usage:{input_tokens:900,cached_input_tokens:400,cache_write_input_tokens:0,output_tokens:50,reasoning_output_tokens:7,total_tokens:950}}}}' \
+        >>"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
+    fi
     exit "${TEST_START_EXIT:-0}" ;;
   'agent prompt')
     inspect_phase prompt_wait
@@ -42,7 +51,7 @@ case "$1 $2" in
     exit "${TEST_PROMPT_EXIT:-0}" ;;
   'agent get')
     jq -n --arg status "${TEST_AGENT_STATUS:-idle}" \
-      '{result:{agent:{agent_status:$status,tokens:{input_tokens:"120",output_tokens:"30"}}}}' ;;
+      '{result:{agent:{agent_status:$status,tokens:(if env.TEST_NO_HERDR_TOKENS == "1" then null else {input_tokens:"120",output_tokens:"30"} end)}}}' ;;
   'agent read')
     inspect_phase prompt_wait
     printf '%s\n' 'result: done' 'changed: none' 'checks: not-run' 'risks: none' 'next: none' ;;
@@ -57,6 +66,8 @@ printf '%s (Claude Code)\n' "${TEST_CLAUDE_VERSION:-2.1.314}"
 MOCK
 chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" TEST_ROOT="$tmp/work" XDG_STATE_HOME="$tmp/state"
+# Never read the developer's real CLI session records during tests.
+export CODEX_HOME="$tmp/codex-home" CLAUDE_CONFIG_DIR="$tmp/claude-home"
 export HERDR_ENV=1 HERDR_PANE_ID=parent
 export LAUNCH_TASK_ID=runner-fixture
 # These are fixture attestations only; no production approval is inferred.
@@ -296,4 +307,94 @@ if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
   echo 'FAIL: in-repo state accepted' >&2; exit 1
 fi
 [[ ! -e "$tmp/work/state" ]] || { echo 'FAIL: rejected state path created files' >&2; exit 1; }
-printf 'PASS: context, delegation, bounded output, external state, refusal\n'
+
+# Issue #43: the same tier resolves per role (claude implement standard is Haiku High).
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/claude" TEST_CAPTURE_START="$tmp/claude-std-writer-args" \
+  bash "$base/.agents/scripts/run-agent.sh" implement claude standard "$tmp/task.txt" >/dev/null 2>&1)
+args=$(sed -n '/^--$/,$p' "$tmp/claude-std-writer-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--model claude-haiku-5-5 --effort high --permission-mode dontAsk --allowedTools '* ]] \
+  || { echo "FAIL: claude implement standard args: $args" >&2; exit 1; }
+XDG_STATE_HOME="$tmp/codex-role" python3 "$base/.agents/scripts/launch-gate.py" --task-id "$LAUNCH_TASK_ID" \
+  --worktree "$tmp/work" approve --approval-ref fixture-codex-role --provider codex --model gpt-6.1-sol \
+  --additional-launches 1 --paths run-agent >/dev/null
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/codex-role" TEST_CAPTURE_START="$tmp/codex-review-args" \
+  bash "$base/.agents/scripts/run-agent.sh" review codex standard "$tmp/task.txt" >/dev/null 2>&1)
+args=$(sed -n '/^--$/,$p' "$tmp/codex-review-args" | tail -n +2 | tr '\n' ' ')
+[[ $args == '--sandbox read-only -c approval_policy="never" --model gpt-6.1-sol -c model_reasoning_effort=medium ' ]] \
+  || { echo "FAIL: codex review standard args: $args" >&2; exit 1; }
+
+# Invalid model policy fails before any reservation or pane, even when the model is approved.
+mkdir -p "$tmp/badcfg/.agents/config"
+cp -R "$base/.agents/scripts" "$tmp/badcfg/.agents/scripts"
+valid='{"schema_version":2,"efforts":{"codex":["low","medium"]},"roles":{"codex":{"implement":{"light":{"model":"gpt-6-luna","effort":"low"}}}}}'
+bad_cases=(
+  "schema:$(jq -c '.schema_version=1' <<<"$valid")"
+  "legacy:$(jq -c '{profiles:{codex:{light:{model:"gpt-6-luna",effort:"low"}}}}' <<<"$valid")"
+  "no-entry:$(jq -c 'del(.roles.codex.implement.light)' <<<"$valid")"
+  "no-role:$(jq -c 'del(.roles.codex.implement)' <<<"$valid")"
+  "empty-model:$(jq -c '.roles.codex.implement.light.model=""' <<<"$valid")"
+  "bad-model:$(jq -c '.roles.codex.implement.light.model="-x"' <<<"$valid")"
+  "no-effort:$(jq -c 'del(.roles.codex.implement.light.effort)' <<<"$valid")"
+  "empty-effort:$(jq -c '.roles.codex.implement.light.effort=""' <<<"$valid")"
+  "unlisted-effort:$(jq -c '.roles.codex.implement.light.effort="ultra"' <<<"$valid")"
+  "no-effort-list:$(jq -c 'del(.efforts.codex)' <<<"$valid")"
+  "string-effort-list:$(jq -c '.efforts.codex="low medium" | .roles.codex.implement.light.effort="ow"' <<<"$valid")"
+  "numeric-effort:$(jq -c '.efforts.codex=[1] | .roles.codex.implement.light.effort=1' <<<"$valid")"
+  "array-effort:$(jq -c '.efforts.codex=[["low"]] | .roles.codex.implement.light.effort=["low"]' <<<"$valid")"
+  "newline-model:$(jq -c '.roles.codex.implement.light.model="gpt-6-luna\n"' <<<"$valid")"
+  "tab-model:$(jq -c '.roles.codex.implement.light.model="gpt\tlow"' <<<"$valid")"
+  "subst-model:$(jq -c '.roles.codex.implement.light.model="$(id)"' <<<"$valid")"
+  "listed-bad-effort:$(jq -c '.efforts.codex=["--x"] | .roles.codex.implement.light.effort="--x"' <<<"$valid")"
+  "listed-newline-effort:$(jq -c '.efforts.codex=["low\n"] | .roles.codex.implement.light.effort="low\n"' <<<"$valid")"
+  "not-json:{"
+)
+printf '%s\n' "$valid" >"$tmp/badcfg/.agents/config/models.json"
+fixture_policy "$tmp/badcfg-ok"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/badcfg-ok" \
+  bash "$tmp/badcfg/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1) \
+  || { echo 'FAIL: valid copied policy refused' >&2; exit 1; }
+for item in "${bad_cases[@]}"; do
+  label=${item%%:*}
+  printf '%s\n' "${item#*:}" >"$tmp/badcfg/.agents/config/models.json"
+  fixture_policy "$tmp/badcfg-$label"
+  if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/badcfg-$label" TEST_ACTIONS="$tmp/badcfg-$label-actions" \
+    bash "$tmp/badcfg/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>"$tmp/badcfg-$label-error"); then
+    echo "FAIL: invalid model policy accepted: $label" >&2; exit 1
+  fi
+  grep -q 'no valid model for codex implement light' "$tmp/badcfg-$label-error" \
+    || { echo "FAIL: unexpected refusal for $label" >&2; exit 1; }
+  if grep -Eq '^(pane split|agent start)$' "$tmp/badcfg-$label-actions"; then
+    echo "FAIL: child launched for $label" >&2; exit 1
+  fi
+  jq -e '.reservations | length == 0' "$tmp/badcfg-$label/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json" >/dev/null \
+    || { echo "FAIL: reservation made for $label" >&2; exit 1; }
+  if compgen -G "$tmp/badcfg-$label/ai-agent-workflow-lite/*/run.*" >/dev/null; then
+    echo "FAIL: run directory created for $label" >&2; exit 1
+  fi
+done
+# Every shipped role/tier resolves through the same selector run-agent.sh uses.
+for p in codex claude; do for r in implement review; do for t in light standard deep; do
+  jq -er --arg p "$p" --arg r "$r" --arg t "$t" -f "$base/.agents/scripts/select-model.jq" \
+    "$base/.agents/config/models.json" >/dev/null || { echo "FAIL: shipped policy $p $r $t" >&2; exit 1; }
+done; done; done
+# Issue #43: token usage comes from the child's own session record when Herdr has none.
+summary_tokens=$(jq -c '.token_usage' "$summary")
+[[ $summary_tokens == null ]] || { echo "FAIL: token usage without a session record: $summary_tokens" >&2; exit 1; }
+fixture_policy "$tmp/tokens"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens" TEST_CODEX_SESSION=1 TEST_NO_HERDR_TOKENS=1 \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1)
+tsum=$(find "$tmp/tokens" -name summary.json -type f | head -n1)
+jq -e '.token_usage == {source:"codex-session",input_tokens:500,cache_read_tokens:400,cache_write_tokens:0,output_tokens:50,reasoning_tokens:7,total_tokens:950,cost_usd:null}
+  and .input_tokens == null and .output_tokens == null and (.started_epoch | type == "number")' "$tsum" >/dev/null \
+  || { echo "FAIL: session token usage not recorded: $(jq -c '{input_tokens,output_tokens,token_usage}' "$tsum")" >&2; exit 1; }
+# Claude writes cost-state only at exit, so collection time records null and finish-agent.sh retries.
+claude_policy "$tmp/tokens-claude"
+mkdir -p "$CLAUDE_CONFIG_DIR/projects/p"
+printf '%s\n' "{\"type\":\"user\",\"cwd\":\"$tmp/work\"}" >"$CLAUDE_CONFIG_DIR/projects/p/live.jsonl"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens-claude" \
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >/dev/null 2>&1)
+csum=$(find "$tmp/tokens-claude" -name summary.json -type f | head -n1)
+jq -e '.status == "returned" and .token_usage == null' "$csum" >/dev/null \
+  || { echo 'FAIL: claude usage recorded before exit' >&2; exit 1; }
+python3 "$base/tests/test-session-tokens.py" >/dev/null 2>&1 || { echo 'FAIL: session-tokens unit tests' >&2; exit 1; }
+printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy, token usage\n'

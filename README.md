@@ -15,7 +15,9 @@ CLI から **必要なときだけサブエージェントを起動し、その�
 - `.agents/scripts/finish-agent.sh`: Rootの明示的な成果受入を記録し、本人・状態照合とlayout確認付きで当該Paneを片付ける
 - `.agents/scripts/run-pair.sh`: 独立した2割当を事前確認し、別worktree・別Paneで起動して結果を識別する
 - `.agents/scripts/launch-gate.py`: 承認済みタスクの子CLI起動回数を外部stateで予約する
-- `.agents/config/models.json`: light / standard / deep の明示マッピング
+- `.agents/scripts/session-tokens.py`: 子CLIが手元に残すセッション記録から、そのrunのトークン数（Claudeは費用も）を集計して `summary.json` の `token_usage` に入れる。対象のセッションがちょうど1つに決まらなければ `null`
+- `.agents/scripts/select-model.jq`: `run-agent.sh` とテストが共有する、role・tier からモデルと effort を選ぶ判定（不正なら何も返さない）
+- `.agents/config/models.json`: role（implement / review）ごとの light / standard / deep の明示マッピングと、providerごとの許可effort一覧
 - `tests/test-runner.sh`: Herdr を模擬した決定論的なテスト
 
 `bash tests/test-runner.sh` の成功はモックテストの成功であり、Herdr 実機での Worker 起動・監視・結果回収の成功を意味しません。
@@ -43,6 +45,27 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 ```
 
 `run-agent.sh` の引数は `<implement|review> <codex|claude> <light|standard|deep> <task-file>` です。既定は `claude` で、`codex` は承認済みproviderとして選ぶ場合に残しています（旧名 `claude-only` は受け付けません）。**ユーザーが実行を承認した作業**を Root が委譲することを想定しています。Shell/CI のテストは Root が直接実行し、検証専用AIはデフォルトで起動しません。CLI 側の権限・組織ポリシーを上書きするものではありません。
+
+## モデル構成（Issue #43）
+
+`run-agent.sh` は role・provider・tier の組で `models.json` の `roles.<provider>.<role>.<tier>` を選びます。tier はモデル名を含まない用途の名前で、呼び出し側はモデルIDを知りません。
+
+| provider | role | light | standard | deep |
+|---|---|---|---|---|
+| claude | implement | `claude-haiku-5-5` low | `claude-haiku-5-5` high | `claude-opus-5-5` high |
+| claude | review | `claude-haiku-5-5` low | `claude-sonnet-5-5` medium | `claude-opus-5-5` high |
+| codex | implement | `gpt-6-luna` low | `gpt-6-luna` high | `gpt-6.1-sol` high |
+| codex | review | `gpt-6-luna` low | `gpt-6.1-sol` medium | `gpt-6.1-sol` high |
+
+- 未定義の role・tier、model/effort の欠落・空値、`efforts.<provider>` にない effort は、起動予約と Pane 作成より前に失敗します。別の entry やモデルへ黙って切り替えません。Codex の `ultra`（自動でタスクを委譲する）は、再帰委譲をしない規則に合わないため一覧に入れていません。
+- Codex の開発の standard は Luna High です。Issue #43 の再試験（[Wiki](https://github.com/takaturn/ai-agent-workflow-lite/wiki/Issue-43-Model-Trial)）では、Terra Medium・Luna High・Luna Max の3構成を各2回試し、全回合格しました。Luna High の費用（API 換算）は Terra Medium の約2分の1〜5分の1で、所要時間は約1.7倍でした。Luna Max は Luna High より費用・時間ともに大きく、採用していません。試験は小さなタスク1種類だけなので、難しい作業では deep（Sol High）を使ってください。
+- 普段使い（Root）のモデルはこのリポジトリでは設定しません。各自のユーザー設定で切り替えます（Claude Code: `claude --model claude-opus-5-5 --effort low` または `/model`、Codex: `~/.codex/config.toml` の `model = "gpt-6.1-sol"` と `model_reasoning_effort = "low"`）。保護対象の `.claude/settings.json` や `.codex` は変更しません。適用結果はリポジトリのテストでは確認できません。
+- トークン数は、子CLIのセッション記録（Codex: `$CODEX_HOME/sessions` の `token_count`、Claude: `$CLAUDE_CONFIG_DIR/projects` の `cost-state`）から集計し、`summary.json` の `token_usage` に記録します。読むのは数値だけで、本文は保存しません。
+  - 対象は、同じworktreeで、runの開始から120秒以内に始まったセッションです。それがちょうど1つで、読めないファイルや大きすぎるファイル（64MB超）がない場合だけ記録します。決められなければ `null` です。
+  - Codexは実行中に合計を書くため、結果の回収時に記録します。Claudeは終了時に `cost-state` を書くため、回収時は `null` になり、`finish-agent.sh` がpaneを閉じたあとに集計し直します。
+  - 限界: 子と記録を結び付ける識別子はありません。同じworktreeで、同じproviderの別のセッションがその120秒の間に始まり、しかも自分の子の記録が無い場合は、他のセッションの値を記録してしまいます。同じworktreeでは同じproviderの子を同時に動かさないでください。
+  - `input_tokens`／`output_tokens` はHerdrの値だけを入れ、`token_usage` の値では埋めません（2つのCLIで数え方が違うため）。Claudeの `cost_usd` はCLIが算出した値で、Codexでは記録されません。
+- モデルの提供終了の通知（Anthropic・OpenAI の deprecations ページ）を見たら、`models.json` の該当値を差し替えます。差し替えるまで、該当 tier は起動前に失敗します。launch-gate の承認は provider＋model 単位のため、新しいモデルには新しい承認が必要です。
 
 ## タスク単位の起動ゲート（Issue #16）
 

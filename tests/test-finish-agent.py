@@ -35,6 +35,11 @@ elif args[:2]==['pane','close']:
  assert args[2]=='child'
  if os.environ.get('CLOSE_FAIL')=='1':sys.exit(1)
  (root/'closed').touch()
+ if os.environ.get('WRITE_COST')=='1':
+  # Claude writes its session cost-state when it exits, i.e. after the pane closes.
+  d=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])/'projects'/'p'; d.mkdir(parents=True,exist_ok=True)
+  rec=[{'type':'user','cwd':str(root)},{'type':'cost-state','startTime':int(float(os.environ['START_MS'])),'totalCostUSD':0.25,'hasUnknownModelCost':False,'modelUsage':{'m':{'inputTokens':1,'outputTokens':2,'thinkingTokens':0,'cacheReadInputTokens':3,'cacheCreationInputTokens':4}}}]
+  (d/'s.jsonl').write_text(chr(10).join(json.dumps(x) for x in rec)+chr(10))
  if os.environ.get('LOSE_CLOSE_REPLY')=='1':sys.exit(1)
  result={'type':'ok'}
 else:sys.exit(99)
@@ -52,7 +57,8 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
 ''')
     jq.chmod(0o755)
     original = dict(run_id='run.fixture', parent_pane_id='parent', pane_id='child', agent_name='review-fixture', worktree=str(root), status='returned', exit_code=0, phase='result_collected', root_acceptance='pending', cleanup='retained')
-    env = dict(os.environ, TEST_DIR=str(root), HERDR_ENV='1', HERDR_PANE_ID='parent', PATH=str(binaries)+os.pathsep+os.environ['PATH'])
+    env = dict(os.environ, TEST_DIR=str(root), HERDR_ENV='1', HERDR_PANE_ID='parent', PATH=str(binaries)+os.pathsep+os.environ['PATH'],
+               CODEX_HOME=str(root / 'codex-home'), CLAUDE_CONFIG_DIR=str(root / 'claude-home'))
     def reset(**changes):
         summary.write_text(json.dumps(dict(original, **changes)))
         (root / 'actions').write_text('')
@@ -69,6 +75,19 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
     assert actions.count('pane close child') == 1 and 'pane close parent' not in actions and 'pane close unrelated' not in actions, actions
     assert run().returncode == 0
     assert (root / 'actions').read_text().count('pane close child') == 1
+    # Issue #43: token usage missing at collection is retried after close; failure to find it is not fatal.
+    import time
+    started = time.time() - 1
+    reset(profile='claude', started_epoch=started, token_usage=None)
+    process = run(WRITE_COST='1', START_MS=str(started * 1000 + 500))
+    assert process.returncode == 0, process
+    usage = json.loads(summary.read_text())['token_usage']
+    assert usage == {'source':'claude-session','input_tokens':1,'cache_read_tokens':3,'cache_write_tokens':4,'output_tokens':2,'reasoning_tokens':0,'total_tokens':10,'cost_usd':0.25}, usage
+    shutil.rmtree(root / 'claude-home')
+    reset(profile='claude', started_epoch=time.time() - 1, token_usage=None)
+    process = run()
+    data = json.loads(summary.read_text())
+    assert process.returncode == 0 and data['cleanup'] == 'closed' and data['token_usage'] is None, (process, data)
     for changes, fields, reason in [({'TEST_STATUS':'working'}, {}, 'not settled'), ({'TEST_STATUS':'blocked'}, {}, 'not settled'), ({'TEST_STATUS':'unknown'}, {}, 'not settled'), ({'TEST_NAME':'other-agent'}, {}, 'identity mismatch'), ({'HERDR_PANE_ID':'different'}, {}, 'parent mismatch'), ({}, {'worktree':'/different-worktree'}, 'identity mismatch'), ({}, {'status':'failed'}, 'not a returned result'), ({}, {'exit_code':None}, 'not a returned result'), ({}, {'pane_id':'parent'}, 'child equals parent'), ({'FAIL_ACCEPT_WRITE':'1'}, {}, 'cannot record acceptance')]:
         reset(**fields)
         process = run(**changes)
