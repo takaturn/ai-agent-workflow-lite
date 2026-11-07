@@ -20,17 +20,25 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
 3. **作業一覧（Rootが書く唯一の入力）**: `${XDG_STATE_HOME:-~/.local/state}/ai-agent-workflow-lite/root-exit/<session_id>/work.json`
 
    ```json
-   {"version": 1, "task_id": "issue-15", "stop": null, "out_of_scope": null,
+   {"version": 2, "task_id": "issue-15", "stop": null, "out_of_scope": null,
     "work": [{"id": "focused-tests", "kind": "root", "state": "ready"},
-             {"id": "issue-update", "kind": "publish", "state": "permission"}]}
+             {"id": "issue-update", "kind": "publish", "state": "permission"}],
+    "plan": {"deliverables": [{"id": "d1", "source": "成果物の1項目め", "worker": null}],
+             "decision": "serial", "reason": "成果物が1件"}}
    ```
 
    - `kind`: `root|child_launch|publish|read_back`
    - `state`: `done|ready|permission|external`
    - 確認済みのものだけを `done` にする。
-   - 追跡するタスクがないsessionは、`out_of_scope` に理由を書き、`work` を `[]` にする。`work` が空で `out_of_scope` もない雛形は宣言として受け付けない。
+   - 追跡するタスクがないsessionは、`out_of_scope` に理由を書き、`work` を `[]` にする（`plan` は `null`。version 1 の形式も受け付ける）。`work` が空で `out_of_scope` もない雛形は宣言として受け付けない。
    - `stop` には、ユーザーの明示停止（`explicit_stop`）か予算停止（`task_budget`）のときだけ値を入れる。
    - `task_id` は `LAUNCH_TASK_ID` と同じ値で、起動ゲートの明示停止と起動上限を参照するために使う。
+   - **plan（version 2、Issue #63）**: `work` が空でない宣言は version 2 で、`plan` を必須にし、`out_of_scope` との併用は認めない。version 1 で `work` が空でない宣言は不正。
+     - `plan` のキーは `deliverables`・`decision`・`reason` だけ、各成果物は `id`・`source`・`worker` だけ。
+     - `deliverables` は1〜50件。`id` は重複しない識別子（英数字と `_.:-`、128文字以内）。`source` は Issue 本文のどの成果物の項目かを書く空でない文字列。`reason` も空でない文字列。
+     - `decision` が `serial` なら全件の `worker` は `null`。`parallel` なら全件に `worker` があり、ちょうど2種類で、各 `worker` は `work` の `child_launch` の項目の `id` と一致する。
+     - 終了ゲートはGitHubを読まないので、Issue 本文との照合はしない。`source`・成果物の網羅・`reason` の妥当性はRootの自己申告であり、着手前に書いたかも確かめない。`stop` を宣言する、または `work` を空にして `out_of_scope` を書くと plan なしで終われる。
+
 4. **子run（自動）**: `ai-agent-workflow-lite/*/run.*/summary.json` のうち、`parent_pane_id` が自分のpaneのものだけを対象にする。他Rootのrunはpaneが違うので対象外になる。同じpaneを使った以前のsessionの残りを拾わないように、`task_id` があれば一致するrunだけに絞り、なければsession開始（初回hook時に作る `session-began`）以後に更新されたrunだけに絞る。
    - 未回収・未受入・未cleanupは次の作業として扱う。
    - 未解決の失敗は、自動継続しないブロッカーとして扱う。Rootは診断後に `finish-agent.sh --failed <summary> '<診断>'` で解決を記録する（残っている子paneは本人確認のうえ閉じる）。
@@ -43,6 +51,8 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
    4. 権限待ち・外部待ちだけが残っていれば停止する。何も残っていなければ完了とする。
    5. 継続には上限を設ける。ユーザーが始めたturn（`stop_hook_active=false`）ごとに最大10回・3600秒で、上限に達したら停止する。hookによる継続はすべて同じturnの回数に数える。
    6. lock競合、または案内した後もwork.jsonが不正な場合は `continue:false` で停止する。完了とも継続とも扱わない。
+
+   version 2 の反映時、稼働中のsessionの version 1 で `work` が空でない宣言は不正になる。まだ案内を受けていない（`continuation.json` の `asked` が false）sessionでは最初のStopが「work.json is invalid」のblockになり、version 2 に書き直せば続けられる。以前に案内を受けたsession（`asked` が true。turnをまたいで残る）では `root_exit_check_error` で止まるので、Rootが書き直してから次のturnで続ける。反映は稼働中のRoot sessionがないときに行うのが安全。
 
 状態はsessionごとのdirectory（`work.json`、`continuation.json`、`.lock`）に置く。
 

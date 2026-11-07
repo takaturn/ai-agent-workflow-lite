@@ -38,8 +38,12 @@ class DispatchTest(unittest.TestCase):
         return json.loads(run.stdout)
 
     def declare(self, **fields):
-        decl = dict(version=1, task_id=None, stop=None, out_of_scope="fixture", work=[])
+        decl = dict(version=2, task_id=None, stop=None, out_of_scope="fixture", work=[], plan=None)
         decl.update(fields)
+        if decl["work"]:
+            decl.update(out_of_scope=None, plan=dict(
+                deliverables=[dict(id="d1", source="item", worker=None)],
+                decision="serial", reason="one deliverable"))
         self.work.parent.mkdir(parents=True, exist_ok=True)
         self.work.write_text(json.dumps(decl))
 
@@ -55,6 +59,8 @@ class DispatchTest(unittest.TestCase):
         context = self.run_hook("session-start")["hookSpecificOutput"]["additionalContext"]
         self.assertIn(str(self.work), context)
         self.assertIn("session-a", context)
+        self.assertIn('"version":2', context)
+        self.assertIn('"plan":{"deliverables"', context)
 
     def test_undeclared_blocks_once_then_stops(self):
         self.assertEqual(self.run_hook()["decision"], "block")

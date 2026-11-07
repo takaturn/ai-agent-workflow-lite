@@ -44,11 +44,17 @@ def target(event):
 def guide(path, session):
     return (f"Root exit gate: this session ({session}) is checked before it ends. Before implementing or "
             f"delegating, write {path} as JSON: "
-            '{"version":1,"task_id":<LAUNCH_TASK_ID or null>,"stop":null,"out_of_scope":null,'
-            f'"work":[{{"id":"...","kind":"{KINDS}","state":"{STATES}"}}]}}. '
+            '{"version":2,"task_id":<LAUNCH_TASK_ID or null>,"stop":null,"out_of_scope":null,'
+            f'"work":[{{"id":"...","kind":"{KINDS}","state":"{STATES}"}}],'
+            '"plan":{"deliverables":[{"id":"d1","source":"<Issue body deliverable item>","worker":null}],'
+            '"decision":"serial|parallel","reason":"..."}}. '
             "List every required item (implementation, tests, Wiki/Issue/PR updates and their read-back); "
-            "mark done only after verifying it. Child runs from this pane are collected automatically. "
-            'If this session has no task to track, set "out_of_scope" to a short reason and "work" to []. '
+            "mark done only after verifying it. Before implementing or delegating, write one deliverable "
+            "per deliverable item of the Issue body (not one per Issue). For serial, every worker is null; "
+            "for parallel, exactly two workers, each the id of a child_launch work item. "
+            "Child runs from this pane are collected automatically. "
+            'If this session has no task to track, set "out_of_scope" to a short reason, "work" to [] '
+            'and "plan" to null. '
             'Set "stop" only for a real user stop ("explicit_stop") or budget stop ("task_budget").')
 
 
