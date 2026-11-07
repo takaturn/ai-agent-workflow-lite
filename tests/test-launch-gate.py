@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Model-free tests of task-wide launch reservations and approval history."""
 import concurrent.futures
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -156,6 +157,123 @@ class LaunchGateTest(unittest.TestCase):
                   "--outcome", "prelaunch_error")
         self.assertEqual(self.status("prelaunch")["reservations"][0]["status"], "prelaunch_error")
         self.reserve("prelaunch", "retry", ok=False)
+
+    def write_plan(self, task, launches, name="plan.json", mode=0o600):
+        plans = Path(self.tmp.name) / "plans"
+        plans.mkdir(exist_ok=True)
+        path = plans / name
+        raw = json.dumps({"task_id": task, "launches": [
+            {"provider": "fixture-provider", "model": m, "count": c} for m, c in launches]}).encode()
+        path.write_bytes(raw)
+        path.chmod(mode)
+        return path, hashlib.sha256(raw).hexdigest()
+
+    def approve_plan(self, task, plan, answer=None):
+        """show-plan when answer is None, else approve-plan --confirm answer."""
+        extra = ["show-plan", "--plan", str(plan)] if answer is None else \
+            ["approve-plan", "--plan", str(plan), "--confirm", answer]
+        result = subprocess.run(["python3", str(GATE), "--task-id", task, "--worktree", self.worktree, *extra],
+                                env=self.env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
+        if answer is None:
+            return result
+        return result.returncode, result.stdout + result.stderr
+
+    def test_plan_confirmation_records_all_pairs_once(self):
+        plan, digest = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
+        result = self.approve_plan("plan", plan)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan").exists())
+        self.assertIn(digest, result.stdout)
+        self.assertIn("--confirm " + digest[:8], result.stdout)
+        self.assertIn("TOTAL: 3", result.stdout)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
+        for wrong in ("00000000", digest, ""):
+            code, output = self.approve_plan("plan", plan, answer=wrong)
+            self.assertNotEqual(code, 0, output)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertEqual(code, 0, output)
+        data = self.status("plan")
+        self.assertEqual([a["reference"] for a in data["approvals"]], [digest[:16] + "-1", digest[:16] + "-2"])
+        log = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/plan-confirmations.jsonl"
+        self.assertEqual(json.loads(log.read_text())["plan_sha256"], digest)
+        # A restored copy of a used plan is refused before prompting.
+        plan, _ = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("already used", output)
+        # An interrupted append (no trailing newline) does not block completing the record.
+        log.write_text(log.read_text() + '{"plan_sha256": "trunc')
+        self.assertIn("already used", self.approve_plan("plan", plan, answer=digest[:8])[1])
+        # Same pairs under a new label are a distinct plan and add allowance.
+        plan2 = Path(self.tmp.name) / "plans/plan2.json"
+        raw2 = json.dumps({"task_id": "plan", "label": "second", "launches": [
+            {"provider": "fixture-provider", "model": "fixture-model", "count": 1}]}).encode()
+        plan2.write_bytes(raw2)
+        plan2.chmod(0o600)
+        self.assertEqual(self.approve_plan("plan", plan2, answer=hashlib.sha256(raw2).hexdigest()[:8])[0], 0)
+        # Recording plan2 dropped the truncated tail, so later plan operations still parse the log.
+        self.assertNotIn("trunc", log.read_text())
+        self.assertIn("already used", self.approve_plan("plan", plan).stderr)
+        self.assertIn("already used", self.approve_plan("plan", plan2).stderr)
+        # Even without the provenance log, deterministic references never double count.
+        log.unlink()
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.status("plan")["approvals"]), 3)
+        self.reserve("plan", "one")
+        self.reserve("plan", "two")
+        self.reserve("plan", "three")
+        self.reserve("plan", "four", ok=False)
+        self.reserve("plan", "second", model="second-model")
+
+    def test_plan_partial_conflict_and_limit_write_nothing(self):
+        plan, digest = self.write_plan("atomic", [("fixture-model", 1), ("second-model", 1)])
+        self.approve("atomic", 5, model="second-model", reference=digest[:16] + "-2")
+        before = self.status("atomic")
+        code, output = self.approve_plan("atomic", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.status("atomic"), before)
+        plan, digest = self.write_plan("big", [("fixture-model", 15), ("second-model", 6)], name="big.json")
+        code, output = self.approve_plan("big", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("exceeds limit", output)
+        plan, digest = self.write_plan("mode", [("fixture-model", 1)], name="mode.json", mode=0o644)
+        self.assertNotEqual(self.approve_plan("mode", plan).returncode, 0)
+        # Terminal control characters in a model name are rejected before display.
+        plan, digest = self.write_plan("ctrl", [("fixture-model\x1b[2J", 1)], name="ctrl.json")
+        result = self.approve_plan("ctrl", plan)
+        self.assertNotIn("\x1b", result.stdout)
+        self.assertIn("invalid plan provider/model", result.stderr)
+        # A plan reached through a symlinked parent inside the worktree is rejected.
+        inside = Path(self.worktree) / "plan.json"
+        inside.write_bytes(plan.read_bytes().replace(b"\\u001b[2J", b""))
+        inside.chmod(0o600)
+        link = Path(self.tmp.name) / "plans/link"
+        link.symlink_to(self.worktree)
+        self.assertIn("outside the worktree", self.approve_plan("ctrl", link / "plan.json").stderr)
+        # An unwritable provenance log prevents any state write.
+        plan, digest = self.write_plan("log", [("fixture-model", 1)], name="log.json")
+        task_dir = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/log"
+        task_dir.mkdir(parents=True)
+        log = task_dir / "plan-confirmations.jsonl"
+        log.write_text("")
+        log.chmod(0o400)
+        code, output = self.approve_plan("log", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse((task_dir / "state.json").exists())
+
+    def test_legacy_state_fixture_still_reserves(self):
+        state = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/legacy/state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"schema_version": 1, "task_id": "legacy",
+            "unit": "reserved child launch slots", "usage": "unknown", "pricing": "unknown",
+            "stop": {"reason": None, "at": None}, "reservations": [],
+            "approvals": [{"at": "2026-11-01T00:00:00+00:00", "reference": "old-ref",
+                "provider": "fixture-provider", "model": "fixture-model",
+                "paths": ["run-agent"], "additional_launches": 1}]}))
+        self.reserve("legacy", "first")
+        self.reserve("legacy", "second", ok=False)
 
 
 if __name__ == "__main__":

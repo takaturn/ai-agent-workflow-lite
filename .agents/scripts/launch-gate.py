@@ -2,10 +2,12 @@
 """Task-wide, fail-closed reservation ledger for the Herdr runner."""
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -14,6 +16,10 @@ from uuid import uuid4
 UNIT = "reserved child launch slots"
 PATHS = ("run-agent",)
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+PLAN_LIMIT = 20
+PLAN_MAX_BYTES = 65536
+PLAN_LOG = "plan-confirmations.jsonl"
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}\Z")
 
 
 def fail(message):
@@ -153,6 +159,82 @@ def write_atomic(path, data):
             os.unlink(name)
 
 
+def read_plan(path, worktree, task_id):
+    """Read the plan exactly once; hash, display, and record from these bytes."""
+    plan_path = Path(path)
+    if not plan_path.is_absolute():
+        fail("plan path must be absolute")
+    fd = os.open(plan_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        # Check the location of the file actually opened, not of a path that may change.
+        opened = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        if opened == worktree or worktree in opened.parents:
+            fail("plan file must be outside the worktree")
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            fail("plan file must be a regular file owned by the current user")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            fail("plan file mode must be 0600")
+        raw = os.read(fd, PLAN_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > PLAN_MAX_BYTES:
+        fail("plan file too large")
+    plan = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    if not isinstance(plan, dict) or not {"task_id", "launches"} <= set(plan) <= {"task_id", "launches", "label"}:
+        fail("plan must contain task_id, launches and optionally label")
+    if "label" in plan and not (isinstance(plan["label"], str) and ID.fullmatch(plan["label"])):
+        fail("invalid plan label")
+    if plan["task_id"] != task_id:
+        fail("plan task_id does not match --task-id")
+    launches = plan["launches"]
+    if not isinstance(launches, list) or not launches:
+        fail("plan launches must be a non-empty list")
+    seen = set()
+    for item in launches:
+        if not isinstance(item, dict) or set(item) != {"provider", "model", "count"}:
+            fail("plan launch must contain exactly provider, model, count")
+        if not all(isinstance(item[k], str) and NAME.fullmatch(item[k]) for k in ("provider", "model")):
+            fail("invalid plan provider/model")
+        if type(item["count"]) is not int or item["count"] <= 0:
+            fail("plan count must be a positive integer")
+        if (item["provider"], item["model"]) in seen:
+            fail("duplicate provider/model in plan")
+        seen.add((item["provider"], item["model"]))
+    total = sum(item["count"] for item in launches)
+    if total > PLAN_LIMIT:
+        fail(f"plan total {total} exceeds limit {PLAN_LIMIT}")
+    return raw, plan, total
+
+
+def show_plan(plan, digest, total):
+    print("Launch approval plan (normalized):")
+    print(json.dumps(plan, indent=2, sort_keys=True))
+    print("plan sha256: " + digest)
+    for item in plan["launches"]:
+        print(f"  >> {item['provider']} / {item['model']}: {item['count']} launches (path run-agent)")
+    print(f"  >> TOTAL: {total} launches for task {plan['task_id']}")
+    print("To record after reading the plan above, run:  --confirm " + digest[:8])
+
+
+def used_plans(log_file):
+    if not log_file.exists():
+        return set()
+    if log_file.is_symlink():
+        fail("plan confirmation log must not be a symlink")
+    result = set()
+    with log_file.open("r", encoding="utf-8") as stream:
+        lines = stream.read().split("\n")
+        # The last element is "" after a complete record; anything else is an
+        # interrupted append and is ignored so a retry can complete it.
+        for line in lines[:-1]:
+            entry = json.loads(line, object_pairs_hook=unique_object)
+            if not isinstance(entry, dict) or not isinstance(entry.get("plan_sha256"), str):
+                fail("invalid plan confirmation log")
+            result.add(entry["plan_sha256"])
+    return result
+
+
 def run(args):
     if not ID.fullmatch(args.task_id):
         fail("invalid task ID")
@@ -160,21 +242,39 @@ def run(args):
         fail("worktree must be absolute")
     worktree = Path(args.worktree).resolve()
     parent = state_home(worktree)
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     task_dir = parent / args.task_id
+    if args.command == "show-plan":
+        # Display only: never create state directories or files.
+        if task_dir.is_symlink() or (task_dir.resolve() == worktree or worktree in task_dir.resolve().parents):
+            fail("task state directory must be outside the worktree")
+        raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in used_plans(task_dir / PLAN_LOG):
+            fail("plan already used; write a new plan for additional launches")
+        show_plan(plan, digest, plan_total)
+        return
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     task_dir.mkdir(exist_ok=True, mode=0o700)
     if task_dir.is_symlink() or (worktree and (task_dir.resolve() == worktree or worktree in task_dir.resolve().parents)):
         fail("task state directory must be outside the worktree")
     state_file = task_dir / "state.json"
     if state_file.is_symlink():
         fail("task state file must not be a symlink")
+    log_file = task_dir / PLAN_LOG
+    if args.command == "approve-plan":
+        raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in used_plans(log_file):
+            fail("plan already used; write a new plan for additional launches")
+        if not re.fullmatch(r"[0-9a-f]{8}", args.confirm or "") or args.confirm != digest[:8]:
+            fail("--confirm must be the first 8 characters of the plan sha256 shown by show-plan; nothing recorded")
     with open(task_dir / ".lock", "a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if state_file.exists():
             with state_file.open("r", encoding="utf-8") as stream:
                 data = json.load(stream, object_pairs_hook=unique_object)
             total = validate(data, args.task_id)
-        elif args.command == "approve":
+        elif args.command in ("approve", "approve-plan"):
             data = {"schema_version": 1, "task_id": args.task_id, "unit": UNIT,
                     "approvals": [], "reservations": [], "stop": {"reason": None, "at": None},
                     "usage": "unknown", "pricing": "unknown"}
@@ -204,6 +304,48 @@ def run(args):
             write_atomic(state_file, data)
             print(json.dumps({"task_id": args.task_id, "allowance": total + args.additional_launches,
                               "used": len(data["reservations"]), "approval_recorded": True}))
+        elif args.command == "approve-plan":
+            if digest in used_plans(log_file):
+                fail("plan already used; write a new plan for additional launches")
+            added = 0
+            refs = []
+            for number, item in enumerate(plan["launches"], 1):
+                reference = f"{digest[:16]}-{number}"
+                refs.append(reference)
+                previous = next((a for a in data["approvals"] if a["reference"] == reference), None)
+                if previous is not None:
+                    if (previous["provider"] != item["provider"] or previous["model"] != item["model"] or
+                            previous["paths"] != ["run-agent"] or
+                            previous["additional_launches"] != item["count"]):
+                        fail("approval reference already exists with different parameters; nothing recorded")
+                    continue
+                data["approvals"].append({"at": now(), "reference": reference,
+                    "provider": item["provider"], "model": item["model"], "paths": ["run-agent"],
+                    "additional_launches": item["count"]})
+                added += item["count"]
+            if log_file.is_symlink():
+                fail("plan confirmation log must not be a symlink")
+            # Open the provenance log before touching state so an unwritable log records nothing.
+            log_fd = os.open(log_file, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            # Drop an interrupted (newline-less) tail left by a crash, under the lock.
+            existing = os.pread(log_fd, os.fstat(log_fd).st_size, 0)
+            if existing and not existing.endswith(b"\n"):
+                os.ftruncate(log_fd, existing.rfind(b"\n") + 1)
+            log_stream = os.fdopen(log_fd, "a", encoding="utf-8")
+            if added:
+                if data["stop"]["reason"] == "limit_reached":
+                    data["stop"] = {"reason": None, "at": None}
+                validate(data, args.task_id)
+                write_atomic(state_file, data)
+            with log_stream as stream:
+                stream.write(json.dumps({"plan_sha256": digest, "confirmed_at": now(),
+                                         "source": "terminal_confirmation", "approval_refs": refs},
+                                        sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            print(json.dumps({"task_id": args.task_id, "allowance": total + added,
+                              "used": len(data["reservations"]), "approval_recorded": bool(added),
+                              "plan_sha256": digest}))
         elif args.command == "reserve":
             if data["stop"]["reason"] is not None:
                 fail("task stopped: " + data["stop"]["reason"])
@@ -253,6 +395,11 @@ def main():
     approve.add_argument("--model", required=True)
     approve.add_argument("--additional-launches", type=int, required=True)
     approve.add_argument("--paths", nargs="+", choices=PATHS, required=True)
+    show = sub.add_parser("show-plan", help="display a launch plan and its sha256 without recording")
+    show.add_argument("--plan", required=True, help="absolute path to a 0600 plan JSON outside the worktree")
+    plan = sub.add_parser("approve-plan", help="record all pairs of a plan shown by show-plan, at once")
+    plan.add_argument("--plan", required=True, help="absolute path to a 0600 plan JSON outside the worktree")
+    plan.add_argument("--confirm", required=True, help="first 8 characters of the sha256 printed by show-plan")
     reserve = sub.add_parser("reserve")
     reserve.add_argument("--provider", required=True)
     reserve.add_argument("--model", required=True)
