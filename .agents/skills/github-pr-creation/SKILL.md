@@ -1,7 +1,7 @@
 ---
 name: github-pr-creation
 description: Use for PR creation or repair. Verify Development links.
-version: 0.2.0
+version: 0.3.0
 author: takaturn, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -38,6 +38,7 @@ AGENTS.mdの「外部公開前の秘匿情報確認」を各外部書込みの�
 - 既存PRを検索して重複を避ける。commit/push/PR作成の承認範囲を確認し、既存承認を毎回問い直さない。
 - github Skillの既存Git/CI手順に従いfocused tests・review・diff check後、対象ファイルだけcommit/push。
 - PR本文は日本語で概要・Closes直接Issue・Refs親Issue・検証・未検証/merge gate・Wiki証跡を記載。
+- `gh pr create` の前に、その時点で証跡のある受入条件へ直接Issue本文でチェックを付け、`gh issue view <番号> --repo <owner/repo> --json body` で読み戻して反映を確かめる。Issue本文の更新は外部書込みなので公開前ゲートと承認範囲に従い、承認がなければ更新せず、未更新であることと理由を報告する。
 - `terminal`で`gh pr create --base <base> --head <head> --title <title> --body-file <body-file>`を実行。
 - 下記共通検証を行う。
 
@@ -61,7 +62,8 @@ AGENTS.mdの「外部公開前の秘匿情報確認」を各外部書込みの�
 - closingIssuesReferencesで意図した直接Issue番号・repositoryを確認し、未完了の親が含まれないことを確認。Closes文字列を見ただけで成功扱いしない。
 - IssueのDevelopment UIも確認できれば確認する。UI未確認なら「APIで正式なclosing relationshipを確認、UI表示は未確認」と区別する。
 - 本文編集直後はAPIのclosingIssuesReferences反映が遅れる場合がある。本文の成功を読み戻してからread-onlyで最大3回、短い間隔で再確認する。リンクが空だからと同じ編集を再送しない。なお期待するリンクがない場合はbase・番号・repo・権限を調べ、阻害要因を報告。
-- チェックリストは証跡に合わせて更新。複合条件は全条件成立まで未チェック。リンク設定/CI成功だけで実機項目をチェックしない。
+- 直接Issueのチェックリストは証跡に合わせて更新する。PR作成後も、確認（CI、レビュー、実機確認など）が済むたびに、ユーザーへ報告する前に該当項目へチェックを付けて読み戻す。更新は公開前ゲートと承認範囲に従う。複合条件は全条件成立まで未チェック。リンク設定/CI成功だけで実機項目をチェックしない。
+- 証跡がなくチェックできない項目は未チェックのまま残し、理由をPR本文または最終報告に書く。受入条件を削ったり別Issueへ切り出したりしない。修復モードでは依頼範囲外のチェックリストを更新しない。
 - 承認されたIssue共有は重複投稿を避け、PR/Wikiリンクと残件を記載して読み戻す。修復だけなら不要なIssue投稿を増やさない。
 - 新規作成/コードpush時は当該head SHAのCI登録を確認し `gh pr checks <完全URL> --watch` で確認。本文だけの修復時はheadが変わっていないことを確認し、不要な再実行をしない。
 - 最終報告: PR URL、直接Issueの正式リンク確認、親はRefs、CI/head、修復箇所、未達/merge gate。merge/closeしない。
@@ -74,6 +76,8 @@ AGENTS.mdの「外部公開前の秘匿情報確認」を各外部書込みの�
 - 親を誤リンク: 適切な範囲でRefsへ戻しAPIで親が消えたことを確認。
 - 未達あり: 正式リンクは設定し、merge gateと未チェック項目は保持。
 - Closes記載済みだがAPI空: 未確認/失敗と報告。
+- PR作成前に未更新: `gh pr create` へ進まず、証跡のある項目をチェックして読み戻してから作成。
+- PR作成後に済んだ確認が未チェック: 報告前に該当項目をチェックして読み戻す。証跡のない項目は未チェックのまま理由を残す。
 
 ## 公式根拠
 
