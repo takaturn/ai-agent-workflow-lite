@@ -204,14 +204,22 @@ class LaunchGateTest(unittest.TestCase):
         # An interrupted append (no trailing newline) does not block completing the record.
         log.write_text(log.read_text() + '{"plan_sha256": "trunc')
         self.assertIn("already used", self.approve_plan("plan", plan, answer=digest[:8])[1])
+        # Same pairs under a new label are a distinct plan and add allowance.
+        plan2 = Path(self.tmp.name) / "plans/plan2.json"
+        raw2 = json.dumps({"task_id": "plan", "label": "second", "launches": [
+            {"provider": "fixture-provider", "model": "fixture-model", "count": 1}]}).encode()
+        plan2.write_bytes(raw2)
+        plan2.chmod(0o600)
+        self.assertEqual(self.approve_plan("plan", plan2, answer=hashlib.sha256(raw2).hexdigest()[:8])[0], 0)
         # Even without the provenance log, deterministic references never double count.
         log.unlink()
         code, output = self.approve_plan("plan", plan, answer=digest[:8])
         self.assertEqual(code, 0, output)
-        self.assertEqual(len(self.status("plan")["approvals"]), 2)
+        self.assertEqual(len(self.status("plan")["approvals"]), 3)
         self.reserve("plan", "one")
         self.reserve("plan", "two")
-        self.reserve("plan", "three", ok=False)
+        self.reserve("plan", "three")
+        self.reserve("plan", "four", ok=False)
         self.reserve("plan", "second", model="second-model")
 
     def test_plan_partial_conflict_and_limit_write_nothing(self):

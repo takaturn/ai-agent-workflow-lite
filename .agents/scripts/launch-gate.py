@@ -181,8 +181,10 @@ def read_plan(path, worktree, task_id):
     if len(raw) > PLAN_MAX_BYTES:
         fail("plan file too large")
     plan = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
-    if not isinstance(plan, dict) or set(plan) != {"task_id", "launches"}:
-        fail("plan must contain exactly task_id and launches")
+    if not isinstance(plan, dict) or not {"task_id", "launches"} <= set(plan) <= {"task_id", "launches", "label"}:
+        fail("plan must contain task_id, launches and optionally label")
+    if "label" in plan and not (isinstance(plan["label"], str) and ID.fullmatch(plan["label"])):
+        fail("invalid plan label")
     if plan["task_id"] != task_id:
         fail("plan task_id does not match --task-id")
     launches = plan["launches"]
