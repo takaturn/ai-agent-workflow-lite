@@ -245,8 +245,8 @@ def run(args):
     task_dir = parent / args.task_id
     if args.command == "show-plan":
         # Display only: never create state directories or files.
-        if task_dir.is_symlink():
-            fail("task state directory must not be a symlink")
+        if task_dir.is_symlink() or (task_dir.resolve() == worktree or worktree in task_dir.resolve().parents):
+            fail("task state directory must be outside the worktree")
         raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
         digest = hashlib.sha256(raw).hexdigest()
         if digest in used_plans(task_dir / PLAN_LOG):
