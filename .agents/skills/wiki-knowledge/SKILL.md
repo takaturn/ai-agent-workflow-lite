@@ -21,7 +21,7 @@ description: Root-only procedure for reading and recording know-how (facts, meas
 
 ## どこまで読むか
 
-1. Wiki の手元の clone を `git pull --ff-only` で最新にしてから読む。clone がなければ作る。
+1. Wiki の手元の clone を `git pull --ff-only` で最新にしてから読む。clone の置き場所は `~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki` とする（`.claude/settings.json` の Read/Edit の許可ルールはこの中だけに効き、`.git/` の下の Edit は deny で除く。#55）。clone がなければここに作る。
 2. 次の3段階で読む。
    1. Home は毎回読む。
    2. Home の話題・要約・語句から、関係するページを選ぶ。Issue 本文の「関連」に挙がった Issue のページは候補に入れる。選んだページは、まず「結論・現在の値」の節だけを読む。その節がない古いページは、先頭の節だけを読む。
