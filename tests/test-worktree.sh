@@ -15,6 +15,13 @@ check() { (cd "$repo" && bash "$base/.agents/scripts/check-worker-worktree.sh" "
 check worker-a 4 "$one" >"$tmp/assignment"
 test "$(cat "$tmp/assignment")" = "worker-a$(printf '\t')4$(printf '\t')feature/issue4$(printf '\t')$one"
 printf 'PASS: unique assignment\n'
+# Two Writers of one Issue use the worker-qualified branch form beside the legacy form.
+new_b="$tmp/issue-4-worker-b" new_d="$tmp/issue-4-worker-d"
+git -C "$repo" worktree add -qb feature/issue4-worker-b "$new_b"
+git -C "$repo" worktree add -qb feature/issue4-worker-d "$new_d"
+test "$(check worker-b 4 "$new_b" | cut -f3)" = feature/issue4-worker-b
+test "$(check worker-d 4 "$new_d" | cut -f3)" = feature/issue4-worker-d
+printf 'PASS: same-Issue worker-qualified assignments\n'
 # A linked caller shares the common Git directory, even via a symlink.
 ln -s "$one" "$tmp/caller-alias"
 (cd "$tmp/caller-alias" && bash "$base/.agents/scripts/check-worker-worktree.sh" worker-b 5 "$two")
@@ -27,6 +34,16 @@ reject worker-a 4 "$tmp/missing"
 reject worker-b 5 "$one"
 reject worker-a 04 "$one"
 reject worker-a 4 "relative/path"
+# Expected branches are built from the arguments, so look-alike names are refused.
+git -C "$repo" worktree add -qb feature/issue43-x "$tmp/issue-4-3-x"
+reject 3-x 4 "$tmp/issue-4-3-x"
+grep -Fx 'worktree check: branch does not match assignment' "$tmp/rejected"
+# The same look-alike names pass for the assignment they were built from.
+git -C "$repo" worktree add -qb feature/issue4-3-x "$tmp/ok/issue-4-3-x"
+test "$(check 3-x 4 "$tmp/ok/issue-4-3-x" | cut -f3)" = feature/issue4-3-x
+git -C "$repo" worktree add -qb feature/issue4-worker-a "$tmp/peer/issue-4-worker-b"
+reject worker-b 4 "$tmp/peer/issue-4-worker-b"
+grep -Fx 'worktree check: branch does not match assignment' "$tmp/rejected"
 mkdir "$one/issue-4-worker-a"
 reject worker-a 4 "$one/issue-4-worker-a"
 grep -Fx 'worktree check: path must be the worktree root' "$tmp/rejected"

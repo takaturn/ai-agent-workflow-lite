@@ -12,7 +12,7 @@ exit 0
 SH
 cat >"$tmp/.agents/scripts/check-worker-worktree.sh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\t%s\tfeature/issue%s\t%s\n' "$1" "$2" "$2" "$3"
+printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${STUB_BRANCH:-feature/issue$2-$1}" "$3"
 SH
 cat >"$tmp/.agents/scripts/run-agent.sh" <<'SH'
 #!/usr/bin/env bash
@@ -31,12 +31,12 @@ printf 'summary-%s\n' "$id" >&2
 touch "$TEST_DIR/$id.finished"
 SH
 export TEST_DIR="$tmp" LAUNCH_TASK_ID=pair-fixture
-run() { bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 52 "$tmp/b" light "$tmp/task"; }
+run() { bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 51 "$tmp/b" light "$tmp/task"; }
 run >"$tmp/out" 2>"$tmp/err"
 [[ -f "$tmp/a.finished" && -f "$tmp/b.finished" ]]
 # Concurrent output must remain attributable even when completion order changes.
 grep -q '^\[a issue=51\] result-a$' "$tmp/out"
-grep -q '^\[b issue=52\] result-b$' "$tmp/out"
+grep -q '^\[b issue=51\] result-b$' "$tmp/out"
 grep -q '^\[a issue=51\] summary-a$' "$tmp/out"
 rm "$tmp/a.finished" "$tmp/b.finished"
 if FAIL_A=1 run >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
@@ -44,6 +44,12 @@ grep -q 'worker=a issue=51 runner_exit=17' "$tmp/out"
 [[ -f "$tmp/b.finished" && ! -f "$tmp/a.finished" ]]
 rm "$tmp/a.started" "$tmp/b.started"
 if bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" a 52 "$tmp/b" light "$tmp/task" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
+grep -q 'duplicate assignment' "$tmp/err"
+[[ ! -e "$tmp/a.started" && ! -e "$tmp/b.started" ]]
+# Same Issue is allowed, but a shared branch or real worktree path is a duplicate on its own.
+if STUB_BRANCH=feature/issue51 bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 51 "$tmp/b" light "$tmp/task" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
+grep -q 'duplicate assignment' "$tmp/err"
+if bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 52 "$tmp/a" light "$tmp/task" >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
 grep -q 'duplicate assignment' "$tmp/err"
 [[ ! -e "$tmp/a.started" && ! -e "$tmp/b.started" ]]
 # Fault injection: runner succeeds but attribution output fails.
@@ -80,4 +86,4 @@ if [[ ! -f "$tmp/b.finished" ]]; then
   exit 1
 fi
 [[ $status_rc != 0 && -f "$tmp/a.finished" ]]
-printf 'PASS: concurrent launch, attributed output, peer failure isolation, duplicate refusal, output failure drain/wait\n'
+printf 'PASS: same-Issue concurrent launch, attributed output, peer failure isolation, duplicate refusal, output failure drain/wait\n'

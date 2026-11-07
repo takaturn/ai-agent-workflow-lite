@@ -9,18 +9,19 @@ profile=$1; shift
 case "$profile" in codex|claude) ;; *) die 'invalid profile' ;; esac
 base=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 bash "$base/herdr-context.sh" >/dev/null
-declare -a ids issues paths tiers tasks pids
+declare -a ids issues branches paths tiers tasks pids
 for i in 0 1; do
   ids[i]=$1 issues[i]=$2 paths[i]=$3 tiers[i]=$4 tasks[i]=$5; shift 5
   assignment=$(bash "$base/check-worker-worktree.sh" "${ids[i]}" "${issues[i]}" "${paths[i]}")
   IFS=$'\t' read -r worker issue branch canonical <<<"$assignment"
-  paths[i]=$canonical
+  branches[i]=$branch paths[i]=$canonical
   case "${tiers[i]}" in light|standard|deep) ;; *) die 'invalid tier' ;; esac
   tasks[i]=$(realpath -e -- "${tasks[i]}")
   [[ -f ${tasks[i]} && -r ${tasks[i]} && -s ${tasks[i]} ]] || die 'task unreadable or empty'
   [[ $(wc -c <"${tasks[i]}") -le 24000 ]] || die 'task exceeds 24KB'
 done
-[[ ${ids[0]} != "${ids[1]}" && ${issues[0]} != "${issues[1]}" && ${paths[0]} != "${paths[1]}" ]] || die 'duplicate assignment'
+# The same Issue may run two Writers; Worker ID, branch and real worktree path must each differ.
+[[ ${ids[0]} != "${ids[1]}" && ${branches[0]} != "${branches[1]}" && ${paths[0]} != "${paths[1]}" ]] || die 'duplicate assignment'
 # Report both assignments before any launch; output failure cannot leave a partial pair.
 for i in 0 1; do
   printf 'worker=%s issue=%s worktree=%s tier=%s\n' "${ids[i]}" "${issues[i]}" "${paths[i]}" "${tiers[i]}"

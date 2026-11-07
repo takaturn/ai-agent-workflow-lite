@@ -17,7 +17,8 @@ source_common=$(cd "$source_common" && pwd -P) || fail 'cannot resolve caller re
 target_common=$(cd "$target_common" && pwd -P) || fail 'cannot resolve target repository'
 [[ $source_common == "$target_common" ]] || fail 'target belongs to a different repository'
 branch=$(git -C "$path" symbolic-ref --quiet --short HEAD) || fail 'detached HEAD'
-[[ $branch == "feature/issue$issue" ]] || fail 'branch does not match issue'
+# Build expected names from the arguments; never parse issue/worker back out of the branch.
+[[ $branch == "feature/issue$issue" || $branch == "feature/issue$issue-$worker" ]] || fail 'branch does not match assignment'
 git -C "$path" rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1 || fail 'HEAD must resolve to a commit'
 status=$(git -C "$path" status --porcelain --untracked-files=all --ignored=matching) || fail 'cannot inspect worktree status'
 [[ -z $status ]] || fail 'worktree is dirty; inspect without resetting'
