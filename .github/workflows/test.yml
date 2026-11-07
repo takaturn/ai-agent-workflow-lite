@@ -4,7 +4,8 @@ on:
   pull_request:
 
 jobs:
-  shell:
+  # Publication guards: the only job that needs bubblewrap and the actual Gitleaks.
+  guards:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +34,12 @@ jobs:
         run: python3 tests/test-review-depth-router.py
       - name: Claude Code skill symlinks (model-free)
         run: python3 tests/test-skill-links.py
+
+  # Delegation and Herdr lifecycle against mocks; no extra packages.
+  herdr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Agent delegation hook (model-free)
         run: python3 tests/test-agent-delegation-hook.py
       - name: Root completion and session dispatch (model-free)
@@ -54,3 +61,20 @@ jobs:
           for script in .agents/scripts/*.sh tests/*.sh; do
             bash -n "$script"
           done
+
+  # Informational only (tests/README.md): never fails the workflow.
+  step-times:
+    needs: [guards, herdr]
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Step times
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tests/ci-step-times.py

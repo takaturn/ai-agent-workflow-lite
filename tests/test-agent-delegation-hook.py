@@ -4,6 +4,7 @@
 Runs the exact command registered in .claude/settings.json, and runs the
 wrapper against fake hook scripts to cover failure outcomes.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -106,11 +107,14 @@ def main():
                 "import sys\nif sys.argv[1:] != ['validate']:\n"
                 + "".join("    " + line + "\n" for line in body.split("\n"))
                 + "    sys.exit(0)\n" + real)
-            out = run(command, payload(subagent_type="Explore"), tmp)
-            assert out.get("permissionDecision") == "ask", (name, out)
+            # Both modes run at once so the hang waits for the wrapper timeout only once.
             # In a dontAsk session the same failure must deny, not leave a prompt waiting.
-            out = run(command, payload(mode="dontAsk", subagent_type="Explore"), tmp)
-            assert out.get("permissionDecision") == "deny", (name, out)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                asked = pool.submit(run, command, payload(subagent_type="Explore"), tmp)
+                denied = pool.submit(run, command, payload(mode="dontAsk", subagent_type="Explore"), tmp)
+                asked, denied = asked.result(), denied.result()
+            assert asked.get("permissionDecision") == "ask", (name, asked)
+            assert denied.get("permissionDecision") == "deny", (name, denied)
         # Wrapper missing: the registered command's own fallback asks.
         shutil.rmtree(Path(tmp) / ".agents")
         assert run(command, payload(subagent_type="Explore"), tmp)["permissionDecision"] == "ask"

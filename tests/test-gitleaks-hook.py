@@ -19,13 +19,7 @@ class HookTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.work = self.root/'work'
         self.remote = self.root/'receiver.git'
-        self.bin = self.root/'bin'
-        self.bin.mkdir()
-        scanner = self.bin/'gitleaks'
-        scanner.write_text('#!'+sys.executable+'\nimport os,sys\ndata=sys.stdin.buffer.read()\nprint("fixture-private-diagnostic")\nsys.exit(int(os.environ.get("SCAN_FAIL", "0")) or (1 if b"fixture-sensitive" in data else 0))\n')
-        scanner.chmod(0o700)
-        self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
-                        GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+        self.setUpTools()
         self.process(['git','init','-q','--bare',str(self.remote)])
         self.process(['git','init','-q',str(self.work)])
         self.git('config','user.name','Fixture')
@@ -34,6 +28,16 @@ class HookTest(unittest.TestCase):
         self.write_commit('public fixture\n','base')
         self.base=self.git('rev-parse','HEAD').stdout.strip()
         self.assertEqual(self.install().returncode,0)
+
+    def setUpTools(self):
+        """Per-test scanner and environment; never shared between copies."""
+        self.bin = self.root/'bin'
+        self.bin.mkdir()
+        scanner = self.bin/'gitleaks'
+        scanner.write_text('#!'+sys.executable+'\nimport os,sys\ndata=sys.stdin.buffer.read()\nprint("fixture-private-diagnostic")\nsys.exit(int(os.environ.get("SCAN_FAIL", "0")) or (1 if b"fixture-sensitive" in data else 0))\n')
+        scanner.chmod(0o700)
+        self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
+                        GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
 
     def process(self, command, **kwargs):
         return subprocess.run(command, env=self.env, text=True, capture_output=True, **kwargs)

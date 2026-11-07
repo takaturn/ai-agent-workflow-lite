@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Actual local pushes and hook protocol checks; no external receiver or model."""
+import atexit
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import unittest
 
 BASE = Path(__file__).resolve().parents[1]
@@ -14,8 +16,51 @@ native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
 
+def copy_fixture(target, source):
+    """Give target a private copy of source's work and receiver.
+
+    Only the remote URL holds an absolute path, so it is re-pointed; the
+    scanner and environment are rebuilt; worktrees are never in a source."""
+    target.tmp=tempfile.TemporaryDirectory()
+    target.addCleanup(target.tmp.cleanup)
+    target.root=Path(target.tmp.name)
+    target.work=target.root/'work'
+    target.remote=target.root/'receiver.git'
+    shutil.copytree(source.work,target.work,symlinks=True)
+    shutil.copytree(source.remote,target.remote,symlinks=True)
+    target.setUpTools()
+    target.base=source.base
+    target.assertEqual(target.git('remote','set-url','origin',str(target.remote)).returncode,0)
+    target.assertEqual(target.git('remote','get-url','origin').stdout.strip(),str(target.remote))
+    target.assertEqual(target.git('rev-parse','refs/remotes/origin/main').stdout.strip(),
+                       target.remote_oid())
+    return target
+
+
+_SOURCES={}
+
+
+def shared_source(name, build):
+    """Build a fixture once per module; tests only receive copies of it."""
+    if name not in _SOURCES:
+        source=build()
+        atexit.register(source.doCleanups)
+        _SOURCES[name]=source
+    return _SOURCES[name]
+
+
+def approved_copy(test):
+    """Copy of the approved fixture (work, receiver, approval state) for test."""
+    def build():
+        source=PolicyGuardTest()
+        source.build_approved()
+        return source
+    return copy_fixture(test,shared_source('approved',build))
+
+
 class PolicyGuardTest(unittest.TestCase):
     setUpFixture = native.HookTest.setUp
+    setUpTools = native.HookTest.setUpTools
     process = native.HookTest.process
     git = native.HookTest.git
     install = native.HookTest.install
@@ -24,6 +69,10 @@ class PolicyGuardTest(unittest.TestCase):
     push = native.HookTest.push
 
     def setUp(self):
+        approved_copy(self)
+
+    def build_approved(self):
+        """The approved work/receiver/state that every copy starts from."""
         self.setUpFixture()
         self.assertEqual(self.push().returncode,0)
         self.assertEqual(self.git('fetch','-q','origin','main').returncode,0)
@@ -275,161 +324,6 @@ class PolicyGuardTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 module.paths_read(altered)
 
-    def test_approved_hook_upgrade_refuses_foreign_copy(self):
-        other=native.HookTest()
-        other.setUp()
-        try:
-            self.assertEqual(other.push().returncode,0)
-            (other.work/'.agents/scripts').mkdir(parents=True)
-            shutil.copy(BASE/'.agents/scripts/policy-guard.py',other.work/'.agents/scripts/policy-guard.py')
-            shutil.copy(BASE/'.agents/scripts/install-gitleaks-hook.py',
-                        other.work/'.agents/scripts/install-gitleaks-hook.py')
-            old=b'#!/bin/sh\nexit 2\n'
-            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(old)
-            hook=other.work/'.git/hooks/pre-push'
-            hook.write_bytes(old)
-            hook.chmod(0o700)
-            (other.work/'.agents/config').mkdir(parents=True)
-            (other.work/'.agents/config/publication-policy.json').write_bytes(
-                (BASE/'.agents/config/publication-policy.json').read_bytes())
-            (other.work/'AGENTS.md').write_text('Approved fixture rules\n')
-            self.assertEqual(other.git('add','.').returncode,0)
-            self.assertEqual(other.git('commit','-qm','approved old hook').returncode,0)
-            guard=other.work/'.agents/scripts/policy-guard.py'
-            self.assertEqual(other.process([sys.executable,str(guard),'approve',
-                '--approval-ref','old-hook'],cwd=other.work).returncode,0)
-            new=(BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes()
-            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new)
-            self.assertEqual(other.git('add','.').returncode,0)
-            self.assertEqual(other.git('commit','-qm','approved new hook').returncode,0)
-            installer=[sys.executable,str(BASE/'.agents/scripts/install-gitleaks-hook.py'),
-                       '--upgrade-approved']
-            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
-            self.assertEqual(hook.read_bytes(),old)
-            self.assertEqual(other.process([sys.executable,str(guard),'approve',
-                '--approval-ref','new-hook'],cwd=other.work).returncode,0)
-            foreign=b'#!/bin/sh\nexit 3\n'
-            hook.write_bytes(foreign)
-            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
-            self.assertEqual(hook.read_bytes(),foreign)
-            hook.write_bytes(old)
-            # An external installer may not carry bytes the target never approved.
-            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(b'#!/bin/sh\nexit 4\n')
-            self.assertEqual(other.git('commit','-qam','approved other hook').returncode,0)
-            self.assertEqual(other.process([sys.executable,str(guard),'approve',
-                '--approval-ref','other-hook'],cwd=other.work).returncode,0)
-            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
-            self.assertEqual(hook.read_bytes(),old)
-            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new)
-            self.assertEqual(other.git('commit','-qam','approved new hook again').returncode,0)
-            self.assertEqual(other.process([sys.executable,str(guard),'approve',
-                '--approval-ref','new-hook-again'],cwd=other.work).returncode,0)
-            self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
-            self.assertEqual(hook.read_bytes(),new)
-            self.assertTrue(os.access(hook,os.X_OK))
-        finally:
-            other.doCleanups()
-
-    def legacy_fixture(self):
-        """A clone approved before #36: state, guard and hook at pre-move paths."""
-        other=native.HookTest()
-        other.setUp()
-        self.addCleanup(other.doCleanups)
-        self.assertEqual(other.push().returncode,0)
-        spec=importlib.util.spec_from_file_location('legacy_guard',BASE/'.agents/scripts/policy-guard.py')
-        module=importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        moved={new:old for old,new in module.LEGACY_RENAMES.items()}
-        policy=json.loads((BASE/'.agents/config/publication-policy.json').read_text())
-        legacy_paths=[moved.get(p,p) for p in policy['protected_paths']]
-        (other.work/'scripts').mkdir()
-        (other.work/'config').mkdir()
-        for name in ('policy-guard.py','install-gitleaks-hook.py','publication-check.py'):
-            shutil.copy(BASE/'.agents/scripts'/name,other.work/'scripts'/name)
-        old_hook=b'#!/bin/sh\nexit 2\n'
-        (other.work/'scripts/pre-push-gitleaks.py').write_bytes(old_hook)
-        (other.work/'config/publication-policy.json').write_text(
-            json.dumps({'version':1,'protected_paths':legacy_paths}))
-        (other.work/'AGENTS.md').write_text('Approved fixture rules\n')
-        self.assertEqual(other.git('add','.').returncode,0)
-        self.assertEqual(other.git('commit','-qm','legacy layout').returncode,0)
-        legacy=other.git('rev-parse','HEAD').stdout.strip()
-        common=other.work/'.git'
-        installed=common/'hooks/workflow-policy-guard.py'
-        installed.write_bytes(b'# legacy installed guard\n')
-        state=common/'workflow-policy-approvals.json'
-        previous=os.getcwd()
-        os.chdir(other.work)
-        try:
-            snapshot=module.snapshot(legacy_paths,legacy)
-        finally:
-            os.chdir(previous)
-        state.write_bytes(module.canonical({'version':1,'paths':legacy_paths,
-            'guard_sha256':module.digest(installed.read_bytes()),
-            'approvals':[{'reference':'legacy','revision':legacy,'snapshot':snapshot}]}))
-        hook=common/'hooks/pre-push'
-        hook.write_bytes(old_hook)
-        hook.chmod(0o700)
-        for old,new in module.LEGACY_RENAMES.items():
-            (other.work/new).parent.mkdir(parents=True,exist_ok=True)
-            self.assertEqual(other.git('mv',old,new).returncode,0)
-        return other,policy,state,hook
-
-    def test_legacy_layout_migrates_without_dropping_state(self):
-        other,policy,state,hook=self.legacy_fixture()
-        new_hook=(BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes()
-        (other.work/'.agents/config/publication-policy.json').write_text(json.dumps(policy))
-        (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new_hook)
-        self.assertEqual(other.git('add','.').returncode,0)
-        self.assertEqual(other.git('commit','-qm','move under .agents').returncode,0)
-        guard=other.work/'.agents/scripts/policy-guard.py'
-        # The approval state is never removed, so a legacy hook keeps calling the guard.
-        self.assertEqual(other.process([sys.executable,str(guard),'approve',
-            '--approval-ref','issue36'],cwd=other.work).returncode,0)
-        value=json.loads(state.read_bytes())
-        self.assertEqual(value['paths'],policy['protected_paths'])
-        self.assertEqual([a['reference'] for a in value['approvals']],['legacy','issue36'])
-        self.assertEqual(other.process([sys.executable,str(other.work/'.git/hooks/workflow-policy-guard.py'),
-            'check'],cwd=other.work).returncode,0)
-        installer=[sys.executable,str(guard.with_name('install-gitleaks-hook.py')),'--upgrade-approved']
-        self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
-        self.assertEqual(hook.read_bytes(),new_hook)
-
-    def test_legacy_policy_without_state_fails_closed(self):
-        other,policy,state,hook=self.legacy_fixture()
-        self.assertEqual(other.git('reset','-q','--hard','HEAD').returncode,0)
-        state.unlink()
-        (other.work/'.git/hooks/workflow-policy-guard.py').unlink()
-        hook.unlink()
-        installer=[sys.executable,str(BASE/'.agents/scripts/install-gitleaks-hook.py')]
-        result=other.process(installer,cwd=other.work)
-        self.assertNotEqual(result.returncode,0)
-        self.assertIn('hook install blocked',result.stderr)
-        self.assertFalse(hook.exists())
-        # A current hook installed by other means must not skip the guard either.
-        hook.write_bytes((BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes())
-        hook.chmod(0o700)
-        (other.work/'AGENTS.md').write_text('Unapproved feature rules\n')
-        self.assertEqual(other.git('commit','-qam','unapproved').returncode,0)
-        before=other.remote_oid()
-        result=other.push()
-        self.assertNotEqual(result.returncode,0)
-        self.assertIn('policy guard failure',result.stderr)
-        self.assertEqual(other.remote_oid(),before)
-
-    def test_legacy_state_refuses_other_path_changes(self):
-        other,policy,state,hook=self.legacy_fixture()
-        before=state.read_bytes()
-        changed=dict(policy,protected_paths=policy['protected_paths']+['README.md'])
-        (other.work/'README.md').write_text('extra\n')
-        (other.work/'.agents/config/publication-policy.json').write_text(json.dumps(changed))
-        self.assertEqual(other.git('add','.').returncode,0)
-        self.assertEqual(other.git('commit','-qm','move and widen').returncode,0)
-        guard=other.work/'.agents/scripts/policy-guard.py'
-        self.assertNotEqual(other.process([sys.executable,str(guard),'approve',
-            '--approval-ref','issue36'],cwd=other.work).returncode,0)
-        self.assertEqual(state.read_bytes(),before)
-
     def test_missing_state_and_malformed_event_deny(self):
         for payload in ('{}','[]','invalid json'):
             result=self.guard('hook',input=payload)
@@ -572,6 +466,173 @@ class PolicyGuardTest(unittest.TestCase):
         (other/'AGENTS.md').write_text('unapproved')
         self.assertNotEqual(self.guard('check',cwd=other).returncode,0)
         self.assertEqual(self.guard('check').returncode,0)
+
+
+class OwnFixtureTest(unittest.TestCase):
+    """Tests that build their own fixture and need no approved copy."""
+
+    def test_approved_hook_upgrade_refuses_foreign_copy(self):
+        other=native.HookTest()
+        other.setUp()
+        try:
+            self.assertEqual(other.push().returncode,0)
+            (other.work/'.agents/scripts').mkdir(parents=True)
+            shutil.copy(BASE/'.agents/scripts/policy-guard.py',other.work/'.agents/scripts/policy-guard.py')
+            shutil.copy(BASE/'.agents/scripts/install-gitleaks-hook.py',
+                        other.work/'.agents/scripts/install-gitleaks-hook.py')
+            old=b'#!/bin/sh\nexit 2\n'
+            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(old)
+            hook=other.work/'.git/hooks/pre-push'
+            hook.write_bytes(old)
+            hook.chmod(0o700)
+            (other.work/'.agents/config').mkdir(parents=True)
+            (other.work/'.agents/config/publication-policy.json').write_bytes(
+                (BASE/'.agents/config/publication-policy.json').read_bytes())
+            (other.work/'AGENTS.md').write_text('Approved fixture rules\n')
+            self.assertEqual(other.git('add','.').returncode,0)
+            self.assertEqual(other.git('commit','-qm','approved old hook').returncode,0)
+            guard=other.work/'.agents/scripts/policy-guard.py'
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','old-hook'],cwd=other.work).returncode,0)
+            new=(BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes()
+            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new)
+            self.assertEqual(other.git('add','.').returncode,0)
+            self.assertEqual(other.git('commit','-qm','approved new hook').returncode,0)
+            installer=[sys.executable,str(BASE/'.agents/scripts/install-gitleaks-hook.py'),
+                       '--upgrade-approved']
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),old)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','new-hook'],cwd=other.work).returncode,0)
+            foreign=b'#!/bin/sh\nexit 3\n'
+            hook.write_bytes(foreign)
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),foreign)
+            hook.write_bytes(old)
+            # An external installer may not carry bytes the target never approved.
+            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(b'#!/bin/sh\nexit 4\n')
+            self.assertEqual(other.git('commit','-qam','approved other hook').returncode,0)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','other-hook'],cwd=other.work).returncode,0)
+            self.assertNotEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),old)
+            (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new)
+            self.assertEqual(other.git('commit','-qam','approved new hook again').returncode,0)
+            self.assertEqual(other.process([sys.executable,str(guard),'approve',
+                '--approval-ref','new-hook-again'],cwd=other.work).returncode,0)
+            self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
+            self.assertEqual(hook.read_bytes(),new)
+            self.assertTrue(os.access(hook,os.X_OK))
+        finally:
+            other.doCleanups()
+
+    def legacy_fixture(self):
+        """A private copy of the shared pre-#36 clone (state, guard, hook at old paths)."""
+        policy=json.loads((BASE/'.agents/config/publication-policy.json').read_text())
+        other=copy_fixture(native.HookTest(),shared_source('legacy',build_legacy))
+        self.addCleanup(other.doCleanups)
+        common=other.work/'.git'
+        return other,policy,common/'workflow-policy-approvals.json',common/'hooks/pre-push'
+
+    def test_legacy_layout_migrates_without_dropping_state(self):
+        other,policy,state,hook=self.legacy_fixture()
+        new_hook=(BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes()
+        (other.work/'.agents/config/publication-policy.json').write_text(json.dumps(policy))
+        (other.work/'.agents/scripts/pre-push-gitleaks.py').write_bytes(new_hook)
+        self.assertEqual(other.git('add','.').returncode,0)
+        self.assertEqual(other.git('commit','-qm','move under .agents').returncode,0)
+        guard=other.work/'.agents/scripts/policy-guard.py'
+        # The approval state is never removed, so a legacy hook keeps calling the guard.
+        self.assertEqual(other.process([sys.executable,str(guard),'approve',
+            '--approval-ref','issue36'],cwd=other.work).returncode,0)
+        value=json.loads(state.read_bytes())
+        self.assertEqual(value['paths'],policy['protected_paths'])
+        self.assertEqual([a['reference'] for a in value['approvals']],['legacy','issue36'])
+        self.assertEqual(other.process([sys.executable,str(other.work/'.git/hooks/workflow-policy-guard.py'),
+            'check'],cwd=other.work).returncode,0)
+        installer=[sys.executable,str(guard.with_name('install-gitleaks-hook.py')),'--upgrade-approved']
+        self.assertEqual(other.process(installer,cwd=other.work).returncode,0)
+        self.assertEqual(hook.read_bytes(),new_hook)
+
+    def test_legacy_policy_without_state_fails_closed(self):
+        other,policy,state,hook=self.legacy_fixture()
+        self.assertEqual(other.git('reset','-q','--hard','HEAD').returncode,0)
+        state.unlink()
+        (other.work/'.git/hooks/workflow-policy-guard.py').unlink()
+        hook.unlink()
+        installer=[sys.executable,str(BASE/'.agents/scripts/install-gitleaks-hook.py')]
+        result=other.process(installer,cwd=other.work)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('hook install blocked',result.stderr)
+        self.assertFalse(hook.exists())
+        # A current hook installed by other means must not skip the guard either.
+        hook.write_bytes((BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes())
+        hook.chmod(0o700)
+        (other.work/'AGENTS.md').write_text('Unapproved feature rules\n')
+        self.assertEqual(other.git('commit','-qam','unapproved').returncode,0)
+        before=other.remote_oid()
+        result=other.push()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('policy guard failure',result.stderr)
+        self.assertEqual(other.remote_oid(),before)
+
+    def test_legacy_state_refuses_other_path_changes(self):
+        other,policy,state,hook=self.legacy_fixture()
+        before=state.read_bytes()
+        changed=dict(policy,protected_paths=policy['protected_paths']+['README.md'])
+        (other.work/'README.md').write_text('extra\n')
+        (other.work/'.agents/config/publication-policy.json').write_text(json.dumps(changed))
+        self.assertEqual(other.git('add','.').returncode,0)
+        self.assertEqual(other.git('commit','-qm','move and widen').returncode,0)
+        guard=other.work/'.agents/scripts/policy-guard.py'
+        self.assertNotEqual(other.process([sys.executable,str(guard),'approve',
+            '--approval-ref','issue36'],cwd=other.work).returncode,0)
+        self.assertEqual(state.read_bytes(),before)
+
+
+def build_legacy():
+    """A clone approved before #36: state, guard and hook at pre-move paths."""
+    other=native.HookTest()
+    other.setUp()
+    other.assertEqual(other.push().returncode,0)
+    spec=importlib.util.spec_from_file_location('legacy_guard',BASE/'.agents/scripts/policy-guard.py')
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    moved={new:old for old,new in module.LEGACY_RENAMES.items()}
+    policy=json.loads((BASE/'.agents/config/publication-policy.json').read_text())
+    legacy_paths=[moved.get(p,p) for p in policy['protected_paths']]
+    (other.work/'scripts').mkdir()
+    (other.work/'config').mkdir()
+    for name in ('policy-guard.py','install-gitleaks-hook.py','publication-check.py'):
+        shutil.copy(BASE/'.agents/scripts'/name,other.work/'scripts'/name)
+    old_hook=b'#!/bin/sh\nexit 2\n'
+    (other.work/'scripts/pre-push-gitleaks.py').write_bytes(old_hook)
+    (other.work/'config/publication-policy.json').write_text(
+        json.dumps({'version':1,'protected_paths':legacy_paths}))
+    (other.work/'AGENTS.md').write_text('Approved fixture rules\n')
+    other.assertEqual(other.git('add','.').returncode,0)
+    other.assertEqual(other.git('commit','-qm','legacy layout').returncode,0)
+    legacy=other.git('rev-parse','HEAD').stdout.strip()
+    common=other.work/'.git'
+    installed=common/'hooks/workflow-policy-guard.py'
+    installed.write_bytes(b'# legacy installed guard\n')
+    state=common/'workflow-policy-approvals.json'
+    previous=os.getcwd()
+    os.chdir(other.work)
+    try:
+        snapshot=module.snapshot(legacy_paths,legacy)
+    finally:
+        os.chdir(previous)
+    state.write_bytes(module.canonical({'version':1,'paths':legacy_paths,
+        'guard_sha256':module.digest(installed.read_bytes()),
+        'approvals':[{'reference':'legacy','revision':legacy,'snapshot':snapshot}]}))
+    hook=common/'hooks/pre-push'
+    hook.write_bytes(old_hook)
+    hook.chmod(0o700)
+    for old,new in module.LEGACY_RENAMES.items():
+        (other.work/new).parent.mkdir(parents=True,exist_ok=True)
+        other.assertEqual(other.git('mv',old,new).returncode,0)
+    return other
 
 
 if __name__=='__main__':
