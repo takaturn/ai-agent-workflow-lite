@@ -31,6 +31,8 @@ jobs:
         run: python3 tests/test-launch-gate.py
       - name: Review depth routing (model-free)
         run: python3 tests/test-review-depth-router.py
+      - name: Claude Code skill symlinks (model-free)
+        run: python3 tests/test-skill-links.py
       - name: Agent delegation hook (model-free)
         run: python3 tests/test-agent-delegation-hook.py
       - name: Root completion and session dispatch (model-free)
