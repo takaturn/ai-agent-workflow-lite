@@ -117,25 +117,28 @@ CodexとClaude Codeのユーザー設定に `.agents/scripts/root-exit-dispatch.
 
 ## Worker の branch / worktree 分離（Issue #4）
 
-原則は **1 Issue = 1 branch = 1 worktree = 1 PR**。Root が割当を直列に準備し、Worker ID・Issue・branch・絶対パスの対応をタスクに明記します。これは Git の編集分離であり、他のディレクトリへのアクセスを禁止する sandbox ではありません。
+原則は **1 Writer = 1 branch = 1 worktree**。1つのIssueに2 Writerを並べる場合も、branchとworktreeはWriterごとに別にします。PRへの統合はRootが各差分を検証してから行います。Root が割当を直列に準備し、Worker ID・Issue・branch・絶対パスの対応をタスクに明記します。これは Git の編集分離であり、他のディレクトリへのアクセスを禁止する sandbox ではありません。
 
 新規割当の例（リポジトリ内から実行）:
 
 ```bash
 git status --porcelain --untracked-files=all --ignored=matching
 git worktree list --porcelain
-git branch --list feature/issue4
+git branch --list feature/issue4 'feature/issue4-*'
 # 上記を確認し、汚れ・既存branch・既存割当があれば停止して調査する。
 # 存在する親ディレクトリの絶対パスを指定する。リポジトリ外を推奨。
-git worktree add -b feature/issue4 /absolute/worker-root/issue-4-worker-a HEAD
+git worktree add -b feature/issue4-worker-a /absolute/worker-root/issue-4-worker-a HEAD
 bash .agents/scripts/check-worker-worktree.sh worker-a 4 /absolute/worker-root/issue-4-worker-a
+# 同じIssueの2つ目のWriterは別のWorker ID・branch・worktreeで作る。
+git worktree add -b feature/issue4-worker-b /absolute/worker-root/issue-4-worker-b HEAD
+bash .agents/scripts/check-worker-worktree.sh worker-b 4 /absolute/worker-root/issue-4-worker-b
 ```
 
-確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。命名は `feature/issue<N>` と `issue-<N>-<worker-id>`。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
+確認Shellは読取専用で、成功時に `Worker ID<TAB>Issue<TAB>branch<TAB>絶対パス` を返します。branchは `feature/issue<N>-<worker-id>`（新しい形）または `feature/issue<N>`（従来の形）、ディレクトリは `issue-<N>-<worker-id>`。branchは引数のIssueとWorker IDから組み立てた2つの名前との完全一致で判定し、branch名からIssueやWorker IDを読み取りません（`feature/issue4-3-x` と `feature/issue43-x` の取り違えを防ぐため）。同じIssueで両方の形が並んでもよいですが、branchは別にします。従来の形 `feature/issue<N>` はbranch名にWorker IDを含まないため、確認Shellはそのbranchを使っていたのがどのWorkerかを確かめません。`feature/` 以外のbranchは受け付けません。IDは英数字・ハイフン・アンダースコア、Issueは先頭ゼロなしの正整数です。パスは実体の絶対パスへ解決されます。
 
 確認Shellは対象リポジトリ内（既存のlinked worktree内も可）から実行します。呼出元と割当先の実体common Git directoryが一致しなければ拒否します。HEADは実在するcommitへ解決できる必要があり、unborn branchは拒否します。無視対象の生成物・キャッシュも割当前の汚れとして検出し、削除せず停止します。
 
-Root は全割当の出力を比較し、Worker ID・Issue・branch・実体パスが既存の稼働中割当と重複しないことを確認します。このShell単体は稼働中Workerの台帳ではなく、同じ割当を2プロセスへ渡すことまでは検出しません。Gitのbranchチェックも同一worktree内の複数Writerを防ぎません。確認と起動を別のRootから同時に行わないでください。
+Root は全割当の出力を比較し、**Issueは重複してよい。Worker ID・branch・worktreeの実体パスは重複してはいけない**ことを、既存の稼働中割当とも照合します。このShell単体は稼働中Workerの台帳ではなく、同じ割当を2プロセスへ渡すことまでは検出しません。Gitのbranchチェックも同一worktree内の複数Writerを防ぎません。確認と起動を別のRootから同時に行わないでください。
 
 存在しないパス、worktreeルート以外、命名/branch不一致、detached HEAD、未追跡ファイルを含む汚れは拒否します。既存branchには `-b` が失敗し、別worktreeでcheckout済みのbranchはGitが拒否します。`-B` / `--force` / reset / 自動stashで回避しません。再開時は新規作成せず、Rootが既存割当と差分を確認してから判断します。作業開始後の汚れは正常なので、確認Shellは新規割当前のゲートとして使います。
 
@@ -152,7 +155,7 @@ LAUNCH_TASK_ID=issue-51-52 bash .agents/scripts/run-pair.sh claude worker-a 51 /
 bash tests/test-pair.sh
 ```
 
-51/52は使用例です。実際のIssue・branch・worktreeに置き換えます。引数はprofileの後にWorker ID・Issue・絶対worktree・tier・taskを2組。両方を起動前に検査し、既存run-agent.shを各cwdから並行実行します。出力はWorker/Issue接頭辞付きで、起動応答のPane ID・agent名・外部summaryとの対応を追跡できます。Rootは同じIDで状態と短い出力を読み、各差分とfocused testsを検証します。
+51/52は使用例です。実際のIssue・branch・worktreeに置き換えます。引数はprofileの後にWorker ID・Issue・絶対worktree・tier・taskを2組。2組は同じIssueでもよいですが、Worker ID・branch・worktreeの実体パスのどれか1つでも同じなら `duplicate assignment` で拒否します。両方を起動前に検査し、既存run-agent.shを各cwdから並行実行します。出力はWorker/Issue接頭辞付きで、起動応答のPane ID・agent名・外部summaryとの対応を追跡できます。Rootは同じIDで状態と短い出力を読み、各差分とfocused testsを検証します。
 
 一方が失敗しても他方を待ち、全体は非zeroで終了。自動再投入・peer停止・worktree削除・mergeはしません。成功PaneはRoot受入後にidentity/cwd/完了状態を再確認して閉じ、layoutで確認します。失敗Paneは診断用に残します。同時に別Rootから割当・起動しないでください。このShellは全稼働Writerの台帳ではありません。
 
