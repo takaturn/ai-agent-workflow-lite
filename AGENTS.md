@@ -6,6 +6,7 @@
 - `.agents/` paths are **not** a reason by themselves to select the highest model tier. Assess actual difficulty and risk.
 - The user's agreed task scope authorizes ordinary edits, focused tests, and valid review corrections without asking again. Do not bypass platform prompts or perform destructive work, privilege changes, scope expansion, external access, or PR merges without appropriate approval.
 - Shell/CI runs deterministic checks; AI review is conditional, not mandatory.
+- Before adding or changing tests under `tests/`, read `tests/README.md` (extend existing cases first, review triggers).
 - Distinguish user-provided information, tool-observed evidence, and inference. Claim verification only when tool evidence establishes the claimed outcome for the current target; command success alone is insufficient. State unperformed checks and uncertainty.
 - Before consequential changes or external writes, confirm scope against existing authorization; request approval only if insufficient. Read back the exact affected target after each external write before reporting success.
 - Require independent adversarial review for high-impact decisions, including changes to agent authority, launch rules, or evidence standards. Keep static review and executed tests distinct.

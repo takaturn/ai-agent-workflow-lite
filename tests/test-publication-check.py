@@ -11,13 +11,14 @@ import tempfile
 import unittest
 
 GATE = Path(__file__).resolve().parents[1]/'.agents/scripts/publication-check.py'
+# Loaded once so that the approved fixture is built once per module.
+spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[2]/'tests/test-policy-guard.py')
+policy_fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(policy_fixture)
 
 
 class PublicationTest(unittest.TestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[2]/'tests/test-policy-guard.py')
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        self.policy = module.PolicyGuardTest(); self.policy.setUp()
+        self.policy = policy_fixture.approved_copy(policy_fixture.PolicyGuardTest())
         self.addCleanup(self.policy.doCleanups)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -46,6 +46,10 @@ else:sys.exit(99)
 print(json.dumps({'result':result}))
 ''')
     fake.chmod(0o755)
+    # The token retry waits with sleep; record each call and return at once.
+    nap = binaries / 'sleep'
+    nap.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_DIR/sleeps"\n')
+    nap.chmod(0o755)
     real_jq = shutil.which('jq')
     assert real_jq is not None
     jq = binaries / 'jq'
@@ -63,6 +67,9 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
         summary.write_text(json.dumps(dict(original, **changes)))
         (root / 'actions').write_text('')
         (root / 'closed').unlink(missing_ok=True)
+        (root / 'sleeps').unlink(missing_ok=True)
+    def sleeps():
+        return (root / 'sleeps').read_text().splitlines() if (root / 'sleeps').exists() else []
     def run(**changes):
         return subprocess.run(['bash', str(BASE / '.agents/scripts/finish-agent.sh'), str(summary), 'Root verified artifact and focused checks'], env=dict(env, **changes), capture_output=True, text=True, timeout=10)
     reset()
@@ -83,11 +90,13 @@ os.execv({real_jq!r}, [{real_jq!r}, *sys.argv[1:]])
     assert process.returncode == 0, process
     usage = json.loads(summary.read_text())['token_usage']
     assert usage == {'source':'claude-session','input_tokens':1,'cache_read_tokens':3,'cache_write_tokens':4,'output_tokens':2,'reasoning_tokens':0,'total_tokens':10,'cost_usd':0.25}, usage
+    assert sleeps() == [], sleeps()
     shutil.rmtree(root / 'claude-home')
     reset(profile='claude', started_epoch=time.time() - 1, token_usage=None)
     process = run()
     data = json.loads(summary.read_text())
     assert process.returncode == 0 and data['cleanup'] == 'closed' and data['token_usage'] is None, (process, data)
+    assert sleeps() == ['1'] * 5, sleeps()
     for changes, fields, reason in [({'TEST_STATUS':'working'}, {}, 'not settled'), ({'TEST_STATUS':'blocked'}, {}, 'not settled'), ({'TEST_STATUS':'unknown'}, {}, 'not settled'), ({'TEST_NAME':'other-agent'}, {}, 'identity mismatch'), ({'HERDR_PANE_ID':'different'}, {}, 'parent mismatch'), ({}, {'worktree':'/different-worktree'}, 'identity mismatch'), ({}, {'status':'failed'}, 'not a returned result'), ({}, {'exit_code':None}, 'not a returned result'), ({}, {'pane_id':'parent'}, 'child equals parent'), ({'FAIL_ACCEPT_WRITE':'1'}, {}, 'cannot record acceptance')]:
         reset(**fields)
         process = run(**changes)
