@@ -1,4 +1,13 @@
 {
+  "permissions": {
+    "allow": [
+      "Read(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/**)",
+      "Edit(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/**)"
+    ],
+    "deny": [
+      "Edit(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/.git/**)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
