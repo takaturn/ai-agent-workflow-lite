@@ -37,7 +37,7 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
      - `plan` のキーは `deliverables`・`decision`・`reason` だけ、各成果物は `id`・`source`・`worker` だけ。
      - `deliverables` は1〜50件。`id` は重複しない識別子（英数字と `_.:-`、128文字以内）。`source` は Issue 本文のどの成果物の項目かを書く空でない文字列。`reason` も空でない文字列。
      - `decision` が `serial` なら全件の `worker` は `null`。`parallel` なら全件に `worker` があり、ちょうど2種類で、各 `worker` は `work` の `child_launch` の項目の `id` と一致する。
-     - 終了ゲートはGitHubを読まないので、Issue 本文との照合はしない。`source`・成果物の網羅・`reason` の妥当性はRootの自己申告であり、着手前に書いたかも確かめない。`stop` を宣言する、または `work` を空にして `out_of_scope` を書くと plan なしで終われる。
+     - 終了ゲートはGitHubを読まないので、Issue 本文との照合はしない。`source`・成果物の網羅・`reason` の妥当性はRootの自己申告であり、着手前に書いたかも確かめない。`work` が空でない宣言は `stop` があっても plan を検査する（`stop` は有効な宣言の未完了作業より優先して停止するだけ）。`work` を空にして `out_of_scope` を書くと plan なしで終われる。
 
 4. **子run（自動）**: `ai-agent-workflow-lite/*/run.*/summary.json` のうち、`parent_pane_id` が自分のpaneのものだけを対象にする。他Rootのrunはpaneが違うので対象外になる。同じpaneを使った以前のsessionの残りを拾わないように、`task_id` があれば一致するrunだけに絞り、なければsession開始（初回hook時に作る `session-began`）以後に更新されたrunだけに絞る。
    - 未回収・未受入・未cleanupは次の作業として扱う。

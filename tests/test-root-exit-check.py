@@ -176,8 +176,12 @@ class ExitCheck(unittest.TestCase):
                        dict(work=work, plan=parallel("w1", "w2"))):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 checker.inspect({**self.decl, **change}, [], None)
+        # A genuine version 1 declaration (no plan key) is valid only with empty work.
         v1 = {k: v for k, v in self.decl.items() if k != "plan"}
         checker.inspect({**v1, "version": 1, "out_of_scope": "x"}, [], None)
+        for change in (dict(work=work), dict(work=work, stop="explicit_stop")):
+            with self.subTest(v1=change), self.assertRaises(ValueError):
+                checker.inspect({**v1, "version": 1, **change}, [], None)
         for change in (dict(out_of_scope="x"),
                        dict(work=work, plan=SERIAL),
                        dict(work=work, plan={**SERIAL, "deliverables": [
