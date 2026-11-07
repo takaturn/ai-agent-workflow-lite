@@ -242,8 +242,18 @@ def run(args):
         fail("worktree must be absolute")
     worktree = Path(args.worktree).resolve()
     parent = state_home(worktree)
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     task_dir = parent / args.task_id
+    if args.command == "show-plan":
+        # Display only: never create state directories or files.
+        if task_dir.is_symlink():
+            fail("task state directory must not be a symlink")
+        raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in used_plans(task_dir / PLAN_LOG):
+            fail("plan already used; write a new plan for additional launches")
+        show_plan(plan, digest, plan_total)
+        return
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     task_dir.mkdir(exist_ok=True, mode=0o700)
     if task_dir.is_symlink() or (worktree and (task_dir.resolve() == worktree or worktree in task_dir.resolve().parents)):
         fail("task state directory must be outside the worktree")
@@ -251,14 +261,11 @@ def run(args):
     if state_file.is_symlink():
         fail("task state file must not be a symlink")
     log_file = task_dir / PLAN_LOG
-    if args.command in ("show-plan", "approve-plan"):
+    if args.command == "approve-plan":
         raw, plan, plan_total = read_plan(args.plan, worktree, args.task_id)
         digest = hashlib.sha256(raw).hexdigest()
         if digest in used_plans(log_file):
             fail("plan already used; write a new plan for additional launches")
-        if args.command == "show-plan":
-            show_plan(plan, digest, plan_total)
-            return
         if not re.fullmatch(r"[0-9a-f]{8}", args.confirm or "") or args.confirm != digest[:8]:
             fail("--confirm must be the first 8 characters of the plan sha256 shown by show-plan; nothing recorded")
     with open(task_dir / ".lock", "a+b") as lock:
@@ -319,7 +326,11 @@ def run(args):
             if log_file.is_symlink():
                 fail("plan confirmation log must not be a symlink")
             # Open the provenance log before touching state so an unwritable log records nothing.
-            log_fd = os.open(log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            log_fd = os.open(log_file, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            # Drop an interrupted (newline-less) tail left by a crash, under the lock.
+            existing = os.pread(log_fd, os.fstat(log_fd).st_size, 0)
+            if existing and not existing.endswith(b"\n"):
+                os.ftruncate(log_fd, existing.rfind(b"\n") + 1)
             log_stream = os.fdopen(log_fd, "a", encoding="utf-8")
             if added:
                 if data["stop"]["reason"] == "limit_reached":
@@ -327,8 +338,6 @@ def run(args):
                 validate(data, args.task_id)
                 write_atomic(state_file, data)
             with log_stream as stream:
-                if stream.tell() and not log_file.read_bytes().endswith(b"\n"):
-                    stream.write("\n")
                 stream.write(json.dumps({"plan_sha256": digest, "confirmed_at": now(),
                                          "source": "terminal_confirmation", "approval_refs": refs},
                                         sort_keys=True) + "\n")

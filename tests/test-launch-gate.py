@@ -182,6 +182,7 @@ class LaunchGateTest(unittest.TestCase):
         plan, digest = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
         result = self.approve_plan("plan", plan)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan").exists())
         self.assertIn(digest, result.stdout)
         self.assertIn("--confirm " + digest[:8], result.stdout)
         self.assertIn("TOTAL: 3", result.stdout)
@@ -211,6 +212,10 @@ class LaunchGateTest(unittest.TestCase):
         plan2.write_bytes(raw2)
         plan2.chmod(0o600)
         self.assertEqual(self.approve_plan("plan", plan2, answer=hashlib.sha256(raw2).hexdigest()[:8])[0], 0)
+        # Recording plan2 dropped the truncated tail, so later plan operations still parse the log.
+        self.assertNotIn("trunc", log.read_text())
+        self.assertIn("already used", self.approve_plan("plan", plan).stderr)
+        self.assertIn("already used", self.approve_plan("plan", plan2).stderr)
         # Even without the provenance log, deterministic references never double count.
         log.unlink()
         code, output = self.approve_plan("plan", plan, answer=digest[:8])
