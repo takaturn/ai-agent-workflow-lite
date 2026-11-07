@@ -38,8 +38,12 @@ class DispatchTest(unittest.TestCase):
         return json.loads(run.stdout)
 
     def declare(self, **fields):
-        decl = dict(version=1, task_id=None, stop=None, out_of_scope="fixture", work=[])
+        decl = dict(version=2, task_id=None, stop=None, out_of_scope="fixture", work=[], plan=None)
         decl.update(fields)
+        if decl["work"]:
+            decl.update(out_of_scope=None, plan=dict(
+                deliverables=[dict(id="d1", source="item", worker=None)],
+                decision="serial", reason="one deliverable"))
         self.work.parent.mkdir(parents=True, exist_ok=True)
         self.work.write_text(json.dumps(decl))
 
@@ -55,14 +59,31 @@ class DispatchTest(unittest.TestCase):
         context = self.run_hook("session-start")["hookSpecificOutput"]["additionalContext"]
         self.assertIn(str(self.work), context)
         self.assertIn("session-a", context)
+        self.assertIn('"version":2', context)
+        self.assertIn('"plan":{"deliverables"', context)
 
     def test_undeclared_blocks_once_then_stops(self):
         self.assertEqual(self.run_hook()["decision"], "block")
         self.assertEqual(self.run_hook(active=True)["stopReason"], "work_not_declared")
         # A later user turn does not repeat the reminder.
         self.assertEqual(self.run_hook()["stopReason"], "work_not_declared")
+        # Migration (Issue #63): after a reminder (asked=true), a version 1 declaration
+        # with work stops with an error instead of another block.
+        self.write_v1()
+        self.assertEqual(self.run_hook()["stopReason"], "root_exit_check_error")
+
+    def write_v1(self):
+        self.work.parent.mkdir(parents=True, exist_ok=True)
+        self.work.write_text(json.dumps(dict(version=1, task_id=None, stop=None, out_of_scope=None,
+                                             work=[dict(id="tests", kind="root", state="done")])))
 
     def test_declared_work_continues_then_completes(self):
+        # Migration (Issue #63): with no earlier reminder, a version 1 declaration with
+        # work blocks once as invalid, and rewriting it as version 2 lets the turn finish.
+        self.write_v1()
+        self.assertIn("work.json is invalid", self.run_hook()["reason"])
+        self.declare(work=[dict(id="tests", kind="root", state="done")])
+        self.assertEqual(self.run_hook(active=True)["stopReason"], "all_declared_checks_complete")
         self.declare(work=[dict(id="tests", kind="root", state="ready")])
         self.assertEqual(self.run_hook()["decision"], "block")
         self.declare(work=[dict(id="tests", kind="root", state="done")])

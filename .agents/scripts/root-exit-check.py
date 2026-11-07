@@ -57,18 +57,51 @@ def state_root():
     return root / "ai-agent-workflow-lite"
 
 
+def plan(value, work):
+    """Version 2: deliverables counted per Issue-body item, and the parallel/serial decision."""
+    exact(value, "deliverables decision reason")
+    items = value["deliverables"]
+    require(isinstance(items, list) and 1 <= len(items) <= 50)
+    require(value["decision"] in ("serial", "parallel"))
+    require(isinstance(value["reason"], str) and value["reason"].strip())
+    ids, workers = set(), set()
+    for item in items:
+        exact(item, "id source worker")
+        require(identity(item["id"]) not in ids)
+        ids.add(item["id"])
+        require(isinstance(item["source"], str) and item["source"].strip())
+        if value["decision"] == "serial":
+            require(item["worker"] is None)
+        else:
+            workers.add(identity(item["worker"]))
+    if value["decision"] == "parallel":
+        # Each Worker is a declared child launch, so the gate also waits for its run.
+        launches = {w.get("id") for w in work if isinstance(w, dict) and w.get("kind") == "child_launch"}
+        require(len(workers) == 2 and workers <= launches)
+
+
 def declaration(value):
-    """The only Root-written input: required work, or an explicit out-of-scope reason."""
-    exact(value, "version task_id stop out_of_scope work")
-    require(type(value["version"]) is int and value["version"] == 1)
+    """The only Root-written input: required work with its plan, or an out-of-scope reason."""
+    require(isinstance(value, dict) and type(value.get("version")) is int)
+    if value["version"] == 1:
+        exact(value, "version task_id stop out_of_scope work")
+    else:
+        require(value["version"] == 2)
+        exact(value, "version task_id stop out_of_scope work plan")
     if value["task_id"] is not None:
         identity(value["task_id"])
     require(value["stop"] in (None,) + STOPS)
     require(value["out_of_scope"] is None or
             (isinstance(value["out_of_scope"], str) and value["out_of_scope"].strip()))
     require(isinstance(value["work"], list) and len(value["work"]) <= 1000)
-    # An empty template is not a declaration: either list work or say why none is tracked.
-    require(value["work"] or value["out_of_scope"] is not None)
+    if value["work"]:
+        # Tracked work needs a plan; it cannot also claim to be out of scope.
+        require(value["version"] == 2 and value["out_of_scope"] is None)
+        plan(value["plan"], value["work"])
+    else:
+        # An empty template is not a declaration: either list work or say why none is tracked.
+        require(value["out_of_scope"] is not None)
+        require(value.get("plan") is None)
     return value
 
 

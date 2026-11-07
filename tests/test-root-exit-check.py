@@ -14,6 +14,14 @@ spec = importlib.util.spec_from_file_location(
     "root_exit", Path(__file__).resolve().parents[1] / ".agents/scripts/root-exit-check.py")
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
+SERIAL = dict(deliverables=[dict(id="d1", source="Issue item 1", worker=None)],
+              decision="serial", reason="one deliverable")
+
+
+def parallel(*workers):
+    return dict(deliverables=[dict(id=f"d{i}", source=f"Issue item {i}", worker=w)
+                              for i, w in enumerate(workers)],
+                decision="parallel", reason="independent files, no shared resources")
 
 
 class ExitCheck(unittest.TestCase):
@@ -23,7 +31,7 @@ class ExitCheck(unittest.TestCase):
         self.home = Path(self.tmp.name).resolve()
         self.root = self.home / "state" / "ai-agent-workflow-lite"
         self.root.mkdir(parents=True)
-        self.decl = dict(version=1, task_id="issue-15", stop=None, out_of_scope=None, work=[])
+        self.decl = dict(version=2, task_id="issue-15", stop=None, out_of_scope=None, work=[], plan=None)
         self.ledger = None
         self.runs = 0
 
@@ -68,13 +76,13 @@ class ExitCheck(unittest.TestCase):
         self.assertEqual(self.inspect()["outcome"], "incomplete")
 
     def test_ready_work_is_incomplete(self):
-        self.decl["work"] = [dict(id="tests", kind="root", state="ready")]
+        self.decl.update(work=[dict(id="tests", kind="root", state="ready")], plan=SERIAL)
         result = self.inspect()
         self.assertEqual((result["outcome"], result["next"]),
                          ("incomplete", [{"work_id": "tests", "action": "root"}]))
 
     def test_permission_only_stops_but_independent_work_continues(self):
-        self.decl["work"] = [dict(id="pr", kind="publish", state="permission")]
+        self.decl.update(work=[dict(id="pr", kind="publish", state="permission")], plan=SERIAL)
         self.assertEqual(self.inspect()["reason"], "blocked_work")
         self.decl["work"].append(dict(id="tests", kind="root", state="ready"))
         self.assertEqual(self.inspect()["outcome"], "incomplete")
@@ -124,7 +132,7 @@ class ExitCheck(unittest.TestCase):
         self.assertEqual(self.inspect()["outcome"], "complete")
 
     def test_stops_take_priority(self):
-        self.decl["work"] = [dict(id="tests", kind="root", state="ready")]
+        self.decl.update(work=[dict(id="tests", kind="root", state="ready")], plan=SERIAL)
         self.decl["stop"] = "task_budget"
         self.assertEqual(self.inspect()["reason"], "task_budget")
         self.decl["stop"] = None
@@ -133,14 +141,54 @@ class ExitCheck(unittest.TestCase):
 
     def test_launch_limit_blocks_only_child_launch(self):
         self.ledger = dict(stop=dict(reason="limit_reached", at="x"))
-        self.decl["work"] = [dict(id="spawn", kind="child_launch", state="ready")]
+        self.decl.update(work=[dict(id="spawn", kind="child_launch", state="ready")], plan=SERIAL)
         self.assertEqual(self.inspect()["reason"], "blocked_work")
 
     def test_invalid_declarations(self):
+        work = [dict(id="a", kind="root", state="ready")]
+        launches = [dict(id=w, kind="child_launch", state="ready") for w in ("w1", "w2", "w3")]
+        item = SERIAL["deliverables"][0]
         for change in (dict(extra=1), dict(stop="done"), dict(out_of_scope=" "),
-                       dict(work=[dict(id="a", kind="x", state="ready")]),
-                       dict(work=[dict(id="a", kind="root", state="ready")] * 2)):
+                       dict(work=[dict(id="a", kind="x", state="ready")], plan=SERIAL),
+                       dict(work=work * 2, plan=SERIAL),
+                       # Version and plan combinations (Issue #63 spec 2).
+                       dict(version=3), dict(version=True), dict(plan=SERIAL, out_of_scope="x"),
+                       dict(work=work), dict(work=work, plan=None),
+                       dict(work=work, plan=SERIAL, out_of_scope="x"),
+                       dict(version=1, work=work), dict(version=1, work=work, stop="explicit_stop"),
+                       dict(version=1, out_of_scope="x", plan=None),
+                       dict(stop="explicit_stop"),
+                       # Plan structure (spec 3).
+                       dict(work=work, plan={**SERIAL, "extra": 1}),
+                       dict(work=work, plan={**SERIAL, "deliverables": []}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [item] * 51}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [item, item]}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [{**item, "note": 1}]}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [{**item, "id": "a b"}]}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [{**item, "source": " "}]}),
+                       dict(work=work, plan={**SERIAL, "reason": ""}),
+                       dict(work=work, plan={**SERIAL, "decision": "auto"}),
+                       dict(work=work, plan={**SERIAL, "deliverables": [{**item, "worker": "w1"}]}),
+                       dict(work=launches, plan=parallel("w1", None)),
+                       dict(work=launches, plan=parallel("w1", "w1")),
+                       dict(work=launches, plan=parallel("w1", "w2", "w3")),
+                       dict(work=launches[:1] + work, plan=parallel("w1", "a")),
+                       dict(work=work, plan=parallel("w1", "w2"))):
             with self.subTest(change=change), self.assertRaises(ValueError):
+                checker.inspect({**self.decl, **change}, [], None)
+        # A genuine version 1 declaration (no plan key) is valid only with empty work.
+        v1 = {k: v for k, v in self.decl.items() if k != "plan"}
+        checker.inspect({**v1, "version": 1, "out_of_scope": "x"}, [], None)
+        for change in (dict(work=work), dict(work=work, stop="explicit_stop")):
+            with self.subTest(v1=change), self.assertRaises(ValueError):
+                checker.inspect({**v1, "version": 1, **change}, [], None)
+        for change in (dict(out_of_scope="x"),
+                       dict(work=work, plan=SERIAL),
+                       dict(work=work, plan={**SERIAL, "deliverables": [
+                           dict(id=f"d{i}", source="item", worker=None) for i in range(50)]}),
+                       dict(work=launches[:2], plan=parallel("w1", "w2", "w1")),
+                       dict(work=work, plan=SERIAL, stop="explicit_stop")):
+            with self.subTest(valid=change):
                 checker.inspect({**self.decl, **change}, [], None)
 
     def test_hook_decision_limits(self):
