@@ -80,6 +80,18 @@ python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$
 python3 tests/test-launch-gate.py
 ```
 
+### 起動計画の一括承認（Issue #45）
+
+複数の provider/model の承認を、ユーザーの1回の操作でまとめて記録できます。決定事項:
+
+- **計画ファイルの置き場所:** Git作業ツリー外の任意の絶対パス（推奨 `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-plans/<task-id>.json`）。所有者本人・通常ファイル・権限 `0600`・symlink不可・64KiB以下。
+- **コマンド:** `python3 .agents/scripts/launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" approve-plan --plan <絶対パス>`。`--worktree` は既存コマンドと同じく現在のworktreeの絶対パスを渡します。
+- **確認の記録:** 状態ファイルと同じタスクディレクトリの `plan-confirmations.jsonl` に、1行1件のJSON（`plan_sha256`・`confirmed_at`・`source`・`approval_refs`）で追記します。
+
+計画の形式は `{"task_id": "<task-id>", "launches": [{"provider": "...", "model": "...", "count": N}]}` です。経路は常に `run-agent` です。コマンドは計画ファイルを1回だけ読み、そのバイト列のSHA-256・正規化した内容・組ごとの回数と合計を表示し、端末でSHA-256の先頭8文字の入力を求めます。標準入力が端末でない場合や入力が違う場合は何も記録しません。一致した場合だけ、1つのlockの中で全組を検証して状態ファイルへ1回だけ書き込み、1組でも失敗すれば何も書きません。承認参照は `<SHA-256先頭16文字>-<組の番号>` なので、同じ計画を再記録しても二重に数えません。記録した計画ファイルは `.used` に改名され、確認記録にあるSHA-256の計画は再利用できません。1計画の合計は20回までです。状態ファイルの形式と承認レコードの項目は変わりません。
+
+Rootはこのコマンドを自分で実行しません。Rootが計画を書き、ユーザーがプロンプト欄で `! python3 .agents/scripts/launch-gate.py ... approve-plan --plan ...` として実行し、表示されたモデルと回数を読んで判断します。これは公開前チェックやpolicy-guardと同じ**協調的な運用ゲート**であり、同じユーザー・同じマシンでAIが疑似端末やpaneへの入力送信、状態ファイルの直接編集で承認を記録することを強制的には防げません。承認の取り消しは今と同じくタスク全体の `stop` だけです。
+
 各予約は `reserved` から `returned` / `failed` / `interrupted` / `prelaunch_error` に更新されます。強制終了などで `reserved` のままでも消費済みとして数え、自動返却や自動retryはしません。上限到達と明示停止は `stop.reason=limit_reached|explicit_stop` として残し、#15が参照できます。追加承認は上限到達だけを解除し、明示停止を解除しません。この停止状態は新規起動の拒否であり、稼働中の子を停止した証拠ではありません。子の所有者、実効停止能力、停止結果は別途確認してください。`LAUNCH_PATH` による経路の自己申告は受け付けません。使用量と単価は `unknown` のままであり、請求確定額や絶対的な課金上限を保証しません。
 
 対象はこの `run-agent.sh` のCodex/Claude起動と、これを使う `run-pair.sh` です。後者では両worktreeで同じ `LAUNCH_TASK_ID` と `XDG_STATE_HOME` を渡し、policyに共通の `run-agent` 経路を許可してください。直接の `codex` / `claude` / `herdr agent start`、他のrunner、Root自身の推論、稼働中エージェントへの追加promptはこのゲートを通りません。policy/stateの手動編集や異なるstate homeの利用も防げないため、Rootが実際の割当とIDを照合します。モデルなしテストは予約動作の確認であり、実機AI起動や請求の検証ではありません。

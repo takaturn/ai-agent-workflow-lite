@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Model-free tests of task-wide launch reservations and approval history."""
 import concurrent.futures
+import hashlib
 import json
 import os
+import pty
+import select
 from pathlib import Path
 import subprocess
 import tempfile
@@ -156,6 +159,103 @@ class LaunchGateTest(unittest.TestCase):
                   "--outcome", "prelaunch_error")
         self.assertEqual(self.status("prelaunch")["reservations"][0]["status"], "prelaunch_error")
         self.reserve("prelaunch", "retry", ok=False)
+
+    def write_plan(self, task, launches, name="plan.json", mode=0o600):
+        plans = Path(self.tmp.name) / "plans"
+        plans.mkdir(exist_ok=True)
+        path = plans / name
+        raw = json.dumps({"task_id": task, "launches": [
+            {"provider": "fixture-provider", "model": m, "count": c} for m, c in launches]}).encode()
+        path.write_bytes(raw)
+        path.chmod(mode)
+        return path, hashlib.sha256(raw).hexdigest()
+
+    def approve_plan(self, task, plan, answer=None):
+        command = ["python3", str(GATE), "--task-id", task, "--worktree", self.worktree,
+                   "approve-plan", "--plan", str(plan)]
+        if answer is None:
+            return subprocess.run(command, env=self.env, text=True, capture_output=True,
+                                  stdin=subprocess.DEVNULL)
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(command, env=self.env, stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        output = b""
+        sent = False
+        while True:
+            ready, _, _ = select.select([master], [], [], 10)
+            if not ready:
+                break
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output += chunk
+            if not sent and b"to record:" in output:
+                os.write(master, answer.encode() + b"\n")
+                sent = True
+        os.close(master)
+        proc.wait(10)
+        return proc.returncode, output.decode()
+
+    def test_plan_confirmation_records_all_pairs_once(self):
+        plan, digest = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
+        result = self.approve_plan("plan", plan)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(digest, result.stdout)
+        self.assertIn("TOTAL: 3", result.stdout)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
+        code, output = self.approve_plan("plan", plan, answer="00000000")
+        self.assertNotEqual(code, 0, output)
+        self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertEqual(code, 0, output)
+        data = self.status("plan")
+        self.assertEqual([a["reference"] for a in data["approvals"]], [digest[:16] + "-1", digest[:16] + "-2"])
+        self.assertFalse(plan.exists())
+        log = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/plan-confirmations.jsonl"
+        self.assertEqual(json.loads(log.read_text())["plan_sha256"], digest)
+        # A restored copy of a used plan is refused before prompting.
+        plan, _ = self.write_plan("plan", [("fixture-model", 2), ("second-model", 1)])
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("already used", output)
+        # Even without the provenance log, deterministic references never double count.
+        log.unlink()
+        code, output = self.approve_plan("plan", plan, answer=digest[:8])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.status("plan")["approvals"]), 2)
+        self.reserve("plan", "one")
+        self.reserve("plan", "two")
+        self.reserve("plan", "three", ok=False)
+        self.reserve("plan", "second", model="second-model")
+
+    def test_plan_partial_conflict_and_limit_write_nothing(self):
+        plan, digest = self.write_plan("atomic", [("fixture-model", 1), ("second-model", 1)])
+        self.approve("atomic", 5, model="second-model", reference=digest[:16] + "-2")
+        before = self.status("atomic")
+        code, output = self.approve_plan("atomic", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.status("atomic"), before)
+        plan, digest = self.write_plan("big", [("fixture-model", 15), ("second-model", 6)], name="big.json")
+        code, output = self.approve_plan("big", plan, answer=digest[:8])
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("exceeds limit", output)
+        plan, digest = self.write_plan("mode", [("fixture-model", 1)], name="mode.json", mode=0o644)
+        self.assertNotEqual(self.approve_plan("mode", plan).returncode, 0)
+
+    def test_legacy_state_fixture_still_reserves(self):
+        state = Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/legacy/state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"schema_version": 1, "task_id": "legacy",
+            "unit": "reserved child launch slots", "usage": "unknown", "pricing": "unknown",
+            "stop": {"reason": None, "at": None}, "reservations": [],
+            "approvals": [{"at": "2026-11-01T00:00:00+00:00", "reference": "old-ref",
+                "provider": "fixture-provider", "model": "fixture-model",
+                "paths": ["run-agent"], "additional_launches": 1}]}))
+        self.reserve("legacy", "first")
+        self.reserve("legacy", "second", ok=False)
 
 
 if __name__ == "__main__":
