@@ -47,7 +47,7 @@ description: Root-only procedure for recording know-how (facts, measurements, de
 ## 進め方の学び
 
 1. 作業の最後に、Root が進め方の学びをまとめる。対象は、ユーザーから指摘を受けたこと、同じ失敗を2回したこと、手順から外れたこと。
-2. 関連する Issue を `gh issue list --search '<語句>' --state all` で探し、追記先の候補にする。なければ新しい Issue の案にする。
+2. 関連する Issue を `gh issue list --search '<語句>' --state all` で探し、追記先の候補にする。なければ新しい Issue の案にする。Issue の作成は `github-issue-creation` の手順に従う。
 3. **Root は、コメントや Issue を自分の判断だけで投稿しない。** 投稿する本文と投稿先をユーザーに示し、承認を得てから投稿する。投稿後に取り消しても、公開された事実は残る。
 4. 既存の Issue への追記は、Issue 本文ではなくコメントで行う（Issue 本文は仕様であり、全文を書き直す運用を保つ）。
 5. 投稿の前に公開前チェック（`prepare --context-reviewed` と `publish`）を通し、投稿後に読み戻す。会話やプロンプトの引用は載せない。
