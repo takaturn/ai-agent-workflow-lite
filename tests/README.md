@@ -12,7 +12,7 @@ SPEC: Issue #40。テスト群の肥大化を抑えるための規則。
    - 複製元の中に worktree を作らない（絶対パスが記録されるため）
    - 複製のあとに、origin と remote-tracking ref が正しいことを assert する
 4. 本番のスクリプトの待ち（`sleep`、timeout）は変えない。テスト側で、呼ばれたことを記録してすぐ終わる偽のコマンドを `PATH` に置くか、独立した待ちを並行させる。
-5. policy guard、公開前検査、pre-push の拒否テストは assert を減らさない。変えてよいのは fixture の作り方だけ。
+5. policy guard、公開前検査、pre-push の拒否テストは、統合・高速化で assert を減らさない。統合・高速化で変えてよいのは fixture の作り方だけ（assert の追加は 1. のとおりよい）。
 
 ## 統合・変更したテストで失われる確認がないことを示す
 

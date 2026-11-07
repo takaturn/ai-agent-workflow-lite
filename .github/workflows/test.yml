@@ -66,6 +66,7 @@ jobs:
   step-times:
     needs: [guards, herdr]
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       actions: read
