@@ -13,7 +13,7 @@ inspect_phase() {
   [[ ${TEST_INSPECT_STATE:-0} == 1 ]] || return 0
   summaries=("$XDG_STATE_HOME"/ai-agent-workflow-lite/*/run.*/summary.json)
   [[ ${#summaries[@]} == 1 && -f ${summaries[0]} ]]
-  jq -e --arg phase "$1" '.phase==$phase and .status=="running" and .exit_code==null and .root_acceptance=="pending" and .cleanup=="retained"' "${summaries[0]}" >/dev/null
+  jq -e --arg phase "$1" '.phase==$phase and .status=="running" and .exit_code==null and .root_acceptance=="pending" and .cleanup=="retained" and .result_path==null and .result_bytes==null' "${summaries[0]}" >/dev/null
 }
 [[ -z ${TEST_ACTIONS:-} ]] || printf '%s %s\n' "$1" "$2" >>"$TEST_ACTIONS"
 case "$1 $2" in
@@ -48,6 +48,22 @@ case "$1 $2" in
     inspect_phase prompt_wait
     if [[ ${TEST_PROMPT_SIGNAL:-0} == 1 ]]; then kill -TERM "$PPID"; exit 143; fi
     [[ -z ${TEST_CAPTURE_PROMPT:-} ]] || printf '%s' "$4" >"$TEST_CAPTURE_PROMPT"
+    # Issue #71: the child records the Root prompt and its completed final reply.
+    if [[ ${TEST_CODEX_SESSION:-0} == 1 ]]; then
+      jq -cn --arg p "$4" '{type:"response_item",payload:{type:"message",role:"user",content:[{type:"input_text",text:$p}]}},
+        {type:"event_msg",payload:{type:"task_complete",last_agent_message:"result: done\nnext: from-record"}}' \
+        >>"$CODEX_HOME/sessions/2026/11/07/rollout-fixture.jsonl"
+    fi
+    if [[ ${TEST_CLAUDE_SESSION:-0} == 1 ]]; then
+      mkdir -p "$CLAUDE_CONFIG_DIR/projects/r"
+      now=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+      jq -cn --arg p "<pasted_content id=\"a1\">
+$4
+</pasted_content id=\"a1\">" --arg cwd "$TEST_ROOT" --arg ts "$now" \
+        '{type:"user",cwd:$cwd,timestamp:$ts,message:{content:$p}},
+         {type:"assistant",cwd:$cwd,timestamp:$ts,message:{stop_reason:"end_turn",content:[{type:"text",text:"result: done\nnext: claude-record"}]}}' \
+        >"$CLAUDE_CONFIG_DIR/projects/r/child.jsonl"
+    fi
     exit "${TEST_PROMPT_EXIT:-0}" ;;
   'agent get')
     jq -n --arg status "${TEST_AGENT_STATUS:-idle}" \
@@ -120,7 +136,7 @@ grep -q 'launch reservation denied' "$tmp/no-policy-error"
 if grep -Eq '^(pane split|agent start)$' "$tmp/no-policy-actions"; then
   echo 'FAIL: missing policy launched a child' >&2; exit 1
 fi
-(cd "$tmp/work" && bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
+(cd "$tmp/work" && TEST_ACTIONS="$tmp/actions" bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/output" 2>"$tmp/error")
 grep -q '^result: done' "$tmp/output"
 summary="$(find "$tmp/state" -name summary.json -type f | head -n1)"
 [[ -n "$summary" ]] || { echo 'FAIL: summary missing' >&2; exit 1; }
@@ -128,6 +144,9 @@ jq -e '.status == "returned" and .tier == "light" and .pane_id == "child" and .i
 jq -e '.agent_name | test("^implement-[0-9]+-[0-9]+$")' "$summary" >/dev/null
 jq -e '.phase == "result_collected" and .root_acceptance == "pending" and .cleanup == "retained" and .parent_pane_id == "parent" and (.run_id | startswith("run.")) and (.task_sha256 | test("^[a-f0-9]{64}$"))' "$summary" >/dev/null
 jq -e '.task_id == "runner-fixture" and (.reservation_id | length > 0)' "$summary" >/dev/null
+# Issue #71: without a matching session record the screen read is the fallback.
+jq -e '.result_path == null and .result_bytes == null' "$summary" >/dev/null
+grep -q '^agent read' "$tmp/actions" || { echo 'FAIL: fallback screen read missing' >&2; exit 1; }
 ledger="$tmp/state/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json"
 reservation=$(jq -r '.reservation_id' "$summary")
 jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="returned"' "$ledger" >/dev/null
@@ -381,9 +400,23 @@ done; done; done
 summary_tokens=$(jq -c '.token_usage' "$summary")
 [[ $summary_tokens == null ]] || { echo "FAIL: token usage without a session record: $summary_tokens" >&2; exit 1; }
 fixture_policy "$tmp/tokens"
-(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens" TEST_CODEX_SESSION=1 TEST_NO_HERDR_TOKENS=1 \
-  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >/dev/null 2>&1)
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/tokens" TEST_CODEX_SESSION=1 TEST_NO_HERDR_TOKENS=1 TEST_ACTIONS="$tmp/tokens-actions" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" >"$tmp/tokens-output" 2>&1)
 tsum=$(find "$tmp/tokens" -name summary.json -type f | head -n1)
+# Issue #71: the final reply comes from the record into a 0600 result.md; the screen is not read.
+check_result() {
+  local sum=$1 out=$2 actions=$3 body=$4 path
+  path=$(jq -r '.result_path' "$sum")
+  [[ $path == "$(dirname "$sum")/result.md" && $(stat -c %a "$path") == 600 && $(cat "$path") == "$body" ]] \
+    || { echo "FAIL: result.md not written: $path" >&2; exit 1; }
+  jq -e --argjson n "$(wc -c <"$path")" '.result_bytes == $n and .phase == "result_collected" and .status == "returned"' "$sum" >/dev/null
+  grep -Fqx "Result: path=$path bytes=$(wc -c <"$path")" "$out" || { echo 'FAIL: result location not shown' >&2; exit 1; }
+  if grep -q '^agent read' "$actions" || grep -q '^result: done' "$out"; then
+    echo 'FAIL: screen read used although result.md exists' >&2; exit 1
+  fi
+  [[ ! -e "$(dirname "$sum")/.result.tmp" ]]
+}
+check_result "$tsum" "$tmp/tokens-output" "$tmp/tokens-actions" $'result: done\nnext: from-record'
 jq -e '.token_usage == {source:"codex-session",input_tokens:500,cache_read_tokens:400,cache_write_tokens:0,output_tokens:50,reasoning_tokens:7,total_tokens:950,cost_usd:null}
   and .input_tokens == null and .output_tokens == null and (.started_epoch | type == "number")' "$tsum" >/dev/null \
   || { echo "FAIL: session token usage not recorded: $(jq -c '{input_tokens,output_tokens,token_usage}' "$tsum")" >&2; exit 1; }
@@ -396,5 +429,11 @@ printf '%s\n' "{\"type\":\"user\",\"cwd\":\"$tmp/work\"}" >"$CLAUDE_CONFIG_DIR/p
 csum=$(find "$tmp/tokens-claude" -name summary.json -type f | head -n1)
 jq -e '.status == "returned" and .token_usage == null' "$csum" >/dev/null \
   || { echo 'FAIL: claude usage recorded before exit' >&2; exit 1; }
+claude_policy "$tmp/result-claude"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/result-claude" TEST_CLAUDE_SESSION=1 TEST_ACTIONS="$tmp/result-claude-actions" \
+  bash "$base/.agents/scripts/run-agent.sh" review claude standard "$tmp/task.txt" >"$tmp/result-claude-output" 2>&1)
+rsum=$(find "$tmp/result-claude" -name summary.json -type f | head -n1)
+check_result "$rsum" "$tmp/result-claude-output" "$tmp/result-claude-actions" $'result: done\nnext: claude-record'
+jq -e '.token_usage == null' "$rsum" >/dev/null
 python3 "$base/tests/test-session-tokens.py" >/dev/null 2>&1 || { echo 'FAIL: session-tokens unit tests' >&2; exit 1; }
-printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy, token usage\n'
+printf 'PASS: context, delegation, bounded output, external state, refusal, role/tier policy, token usage, result.md\n'

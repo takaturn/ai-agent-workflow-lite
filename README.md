@@ -66,6 +66,9 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
   - Codexは実行中に合計を書くため、結果の回収時に記録します。Claudeは終了時に `cost-state` を書くため、回収時は `null` になり、`finish-agent.sh` がpaneを閉じたあとに集計し直します。
   - 限界: 子と記録を結び付ける識別子はありません。同じworktreeで、同じproviderの別のセッションがその120秒の間に始まり、しかも自分の子の記録が無い場合は、他のセッションの値を記録してしまいます。同じworktreeでは同じproviderの子を同時に動かさないでください。
   - `input_tokens`／`output_tokens` はHerdrの値だけを入れ、`token_usage` の値では埋めません（2つのCLIで数え方が違うため）。Claudeの `cost_usd` はCLIが算出した値で、Codexでは記録されません。
+- 子の最終応答の本文は、`session-result.py` が同じセッション記録から取り出し、runの状態ディレクトリの `result.md`（0600、32KiB以下）に保存します（Issue #71）。`summary.json` の `result_path`／`result_bytes` に場所と大きさを記録し、Rootはこれを1回だけ全文読みます。プロンプトと途中の記録は保存しません。`result.md` は `summary.json` と同じく自動では消しません。本文はそのまま保存されるため、taskで秘密を出力しないよう子に伝えます。
+  - 使うのは、同じworktree・開始から120秒以内・最初のRootのプロンプトが `Task from Root:` とtaskの先頭行で始まる記録がちょうど1つで、完了（Codexの `task_complete`、Claudeの `end_turn`）が確かめられ、本文が空でないときだけです。どれかが崩れたら `null` にし、従来どおり画面の120行を出します。実行の成否は変えません。
+  - 限界: 識別子がないことは上と同じです。本文を取り違えるとRootの受け入れの判断に響くため、迷う場合はすべて `null` にします。CLIの記録の形式が変わった場合も `null` になります。
 - モデルの提供終了の通知（Anthropic・OpenAI の deprecations ページ）を見たら、`models.json` の該当値を差し替えます。差し替えるまで、該当 tier は起動前に失敗します。launch-gate の承認は provider＋model 単位のため、新しいモデルには新しい承認が必要です。
 
 ## タスク単位の起動ゲート（Issue #16）

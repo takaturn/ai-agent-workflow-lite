@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Read(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/**)",
-      "Edit(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/**)"
+      "Edit(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/**)",
+      "Bash(gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}' -f id=:*)"
     ],
     "deny": [
       "Edit(~/ghq/github.com/takaturn/ai-agent-workflow-lite.wiki/.git/**)"
