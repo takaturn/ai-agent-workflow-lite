@@ -43,10 +43,15 @@ def prompt_matches(text, first_line):
 
 
 def load(path):
+    # Stricter than st.records(): a malformed line may hide another matching session, so it is ambiguous.
     try:
-        return list(st.records(path))
+        if path.stat().st_size > st.MAX_BYTES:
+            raise st.Ambiguous("oversized record")
+        with open(path, encoding="utf-8", errors="strict") as handle:
+            items = [json.loads(line) for line in handle if line.strip()]
     except Exception as error:
         raise st.Ambiguous("unreadable candidate") from error
+    return [item for item in items if isinstance(item, dict)]
 
 
 def codex_text(content, kind):
@@ -93,7 +98,7 @@ def claude(cwd, since, first_line):
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     matches = []
     for path in st.recent(home / "projects", "*/*.jsonl", since):
-        first, prompt, final, last_stop = None, None, None, None
+        first, prompt, texts_of_message, message_id, last_stop = None, None, [], object(), None
         for item in load(path):
             if first is None and isinstance(item.get("cwd"), str) and isinstance(item.get("timestamp"), str):
                 first = item
@@ -107,13 +112,19 @@ def claude(cwd, since, first_line):
                     prompt = message["content"]
             elif item.get("type") == "assistant":
                 last_stop = message.get("stop_reason")
+                # One message is split into one record per block; keep every text block of the last message.
+                if message.get("id") is None or message.get("id") != message_id:
+                    texts_of_message = []
+                message_id = message.get("id")
                 content = message.get("content")
                 texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"] \
                     if isinstance(content, list) else []
-                # The closing record must carry the reply; never reuse an earlier mid-turn text.
-                final = texts[-1] if texts and isinstance(texts[-1], str) else None
+                texts_of_message += texts
         if first is None or first["cwd"] != cwd or not st.in_window(st.epoch(first["timestamp"]), since):
             continue
+        # Never reuse text from an earlier message when the closing message has none.
+        ok = texts_of_message and all(isinstance(t, str) for t in texts_of_message)
+        final = "\n\n".join(texts_of_message) if ok else None
         if prompt_matches(prompt, first_line):
             matches.append((last_stop == "end_turn", final))
     if len(matches) != 1 or not matches[0][0]:

@@ -165,6 +165,8 @@ class SessionResult(unittest.TestCase):
 
     def codex_reply(self, name, prompt=PROMPT, final="result: done\nnext: none", complete=True, **kw):
         path = self.codex_session(name, **kw)
+        # The token fixture's "not json" line now makes extraction ambiguous (PR #73); keep it valid here.
+        path.write_text(path.read_text().replace("not json\n", ""), encoding="utf-8")
         user = lambda text: {"type": "response_item", "payload": {"type": "message", "role": "user",
                                                                   "content": [{"type": "input_text", "text": text}]}}
         lines = [user("# AGENTS.md instructions for /work/tree"), user(prompt),
@@ -247,6 +249,22 @@ class SessionResult(unittest.TestCase):
         path = self.claude_reply("p")
         path.write_text(path.read_text().replace('"content": "Task from Root:', '"text": "Task from Root:'), encoding="utf-8")
         self.assertIsNone(self.run_result("claude"))                                  # format changed
+        path.unlink()
+        self.claude_reply("p")
+        self.claude_reply("q").write_text("{broken\n", encoding="utf-8")         # PR #73: a malformed line is not skipped
+        self.assertIsNone(self.run_result("claude"))
+
+    def test_claude_reply_keeps_every_text_block_of_the_final_message(self):
+        # PR #73: real records split one message into one record per block, sharing message.id.
+        path = self.claude_reply("p")
+        lines = path.read_text().splitlines()[:-2]
+        msg = lambda i, stop, block: json.dumps({"type": "assistant", "message": {"id": i, "stop_reason": stop, "content": [block]}})
+        lines += [msg("m1", "tool_use", {"type": "text", "text": "mid-turn"}),
+                  msg("m2", None, {"type": "text", "text": "Findings: A"}),
+                  msg("m2", None, {"type": "thinking", "thinking": "x"}),
+                  msg("m2", "end_turn", {"type": "text", "text": "result: done"})]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.assertEqual(self.run_result("claude"), "Findings: A\n\nresult: done")
 
 
 if __name__ == "__main__":
