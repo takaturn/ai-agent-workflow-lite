@@ -48,13 +48,15 @@ RootとしてCodexとClaude Codeの両方を使う。各CLIのユーザー設定
    1. 作業一覧がない、または不正なら、sessionごとに1回だけblockして宣言や修正を求める。それでも宣言がなければ `work_not_declared` で停止する。未宣言を完了とは扱わない。
    2. 停止の宣言（work.jsonの `stop`、起動ゲートの `explicit_stop`）を最優先する。
    3. 実行可能な作業があれば `decision: block` で継続させる。継続promptには作業IDと次の操作だけを入れ、ユーザーの文やsummaryの文面は含めない。
-   4. 権限待ち・外部待ちだけが残っていれば停止する。何も残っていなければ完了とする。
-   5. 継続には上限を設ける。ユーザーが始めたturn（`stop_hook_active=false`）ごとに最大10回・3600秒で、上限に達したら停止する。hookによる継続はすべて同じturnの回数に数える。
-   6. lock競合、または案内した後もwork.jsonが不正な場合は `continue:false` で停止する。完了とも継続とも扱わない。
+   4. 作業の増加と plan の変化を比べる（#68）。宣言と作業の項目の検査が通ったあと、毎回のStopで作業のidの一覧とplanの要約（正規化したJSONのSHA-256）を `plan-snapshot.json` に保存する。前回の保存があり、前回にないidが増え、planの要約が同じなら、実行可能な作業として次の作業の先頭に `{"action": "replan", "work_ids": [増えたid]}` を置き、一度だけblockする。Rootは成果物を挙げ直し、並列／逐次を判断し直してplanを書き直す。保存は検出の前に行うので、同じ増加では二度blockしない。初回のStop、作業が減っただけ、planが変わった、`plan` が `null` のときは検出しない。停止の宣言、期限、回数の上限、前回の停止は、これより優先する。`plan-snapshot.json` が読めない・形が違うときは前回の保存がないものとして上書きし、保存に失敗したら `root_exit_check_error` で止める。
+      - 限界: Stopは応答の終わりにしか動かないので、作業を始める前には止められない。planの理由の文を少し変えるだけで通れる（判断の中身は確かめない）。work.jsonに足さずに進めた作業や、既存idの中身の差し替えは検出しない。idだけで比べるので、idの付け替えや読み戻しの項目だけの追加でも一度blockする。`plan-snapshot.json` と `continuation.json` は別々に保存するので、その間で失敗すると再試行で案内が出ないことがある。
+   5. 権限待ち・外部待ちだけが残っていれば停止する。何も残っていなければ完了とする。
+   6. 継続には上限を設ける。ユーザーが始めたturn（`stop_hook_active=false`）ごとに最大10回・3600秒で、上限に達したら停止する。hookによる継続はすべて同じturnの回数に数える。
+   7. lock競合、または案内した後もwork.jsonが不正な場合は `continue:false` で停止する。完了とも継続とも扱わない。
 
    version 2 の反映時、稼働中のsessionの version 1 で `work` が空でない宣言は不正になる。まだ案内を受けていない（`continuation.json` の `asked` が false）sessionでは最初のStopが「work.json is invalid」のblockになり、version 2 に書き直せば続けられる。以前に案内を受けたsession（`asked` が true。turnをまたいで残る）では `root_exit_check_error` で止まるので、Rootが書き直してから次のturnで続ける。反映は稼働中のRoot sessionがないときに行うのが安全。
 
-状態はsessionごとのdirectory（`work.json`、`continuation.json`、`.lock`）に置く。
+状態はsessionごとのdirectory（`work.json`、`continuation.json`、`plan-snapshot.json`、`.lock`）に置く。
 
 ## 導入（人の操作はCLIごとに1回）
 
