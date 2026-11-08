@@ -241,6 +241,12 @@ class DispatchTest(unittest.TestCase):
                     self.run_hook()
                     self.declare(out_of_scope="still nothing")
                     self.assertEqual(self.run_hook()["stopReason"], "declared_out_of_scope")
+                    # A version 1 empty declaration has no plan key at all (PR #78 review).
+                    self.work.write_text(json.dumps(dict(version=1, task_id=None, stop=None,
+                                                         out_of_scope="v1", work=[])))
+                    self.assertEqual(self.run_hook()["stopReason"], "declared_out_of_scope")
+                    self.child()
+                    self.assertIn("collect_result", self.run_hook()["reason"])
 
     def test_lock_contention_does_not_complete(self):
         import fcntl

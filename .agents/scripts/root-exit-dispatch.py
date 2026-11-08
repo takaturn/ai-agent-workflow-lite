@@ -110,12 +110,12 @@ def replan(result, decl, path):
     """
     previous = previous_snapshot(path)
     current = {"work": [checker.identity(i["id"]) for i in decl["work"]],
-               "plan": plan_digest(decl["plan"])}
+               "plan": plan_digest(decl.get("plan"))}
     # Save before detecting so the same addition is reported only once.
     write_state(path, current)
     # Stops (work.json or launch-gate explicit_stop) keep priority; only
     # completion or waiting-only results are turned into a replan.
-    if previous is None or decl["plan"] is None or result["reason"] not in (
+    if previous is None or decl.get("plan") is None or result["reason"] not in (
             "executable_work", "blocked_work", "all_declared_checks_complete"):
         return result
     added = [i for i in current["work"] if i not in previous["work"]]
