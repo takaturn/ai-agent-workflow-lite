@@ -108,6 +108,24 @@ The pair runner preflights both clean worktrees before launching, reuses `run-ag
 - Startup blocked/timeout does not prove the process exited. Re-read the returned Pane ID; after the user resolves its trust/approval UI, only resume when it is idle/done and no original prompt was delivered. Never auto-answer trust prompts. `send-keys esc` can interrupt a Codex turn while its background shell command remains alive; verify the terminal separately and do not call this full process cancellation. Additional instructions after a settled turn are distinct from mid-turn steering.
 - After Root verifies successful work, use `finish-agent.sh` for finalized checkpointed returned runs to record acceptance and verified cleanup. For legacy summaries or explicit manual recovery, re-read identity/cwd/settled state, close only the verified task child and read back the parent's layout; never close Root, another task's pane, or a working/blocked agent. Retain a successful pane only when the user asks; failure panes remain available for diagnosis.
 
+### Post-PR fixes (Issue #72)
+
+After a PR exists, Root's large context is re-read on every small call, so hand settled fix work to one cheap Writer when it pays off. Split:
+
+| Work | Owner | Why |
+| --- | --- | --- |
+| FIX/SKIP/STOP decision per Reviewer finding | Root | `review-findings` is for Root's main session only |
+| Applying the findings decided FIX and running tests | Writer (`implement light` or `standard`) | the decision is made and tests can check acceptance |
+| Drafts of factual lists (test results, measurement tables) | Writer, inside its final reply | `result.md` holds only the final reply |
+| Structure and rewriting of Wiki pages, Issue and PR bodies | Root | `wiki-knowledge` is Root-only and children cannot read the Wiki |
+| Publication, read-back and CI result checks | Root | a Writer's Shell is limited to `bash tests/*` and similar; it has no `gh` |
+
+1. **One round.** Decide all findings at once, put every FIX into one task file and hand it to one Writer. The task file lists each FIX with its allowed files and says: "include any requested table drafts in your final reply". Ask for all expected launches at the start of the work with `launch-gate --additional-launches`.
+2. **Worktree.** Cut the Writer's branch and worktree from the PR branch's HEAD (naming and `check-worker-worktree.sh` as above). The Writer cannot commit.
+3. **Integration.** Before applying, Root checks `git diff --stat` and the diff in the Writer's worktree against the task's FIX list and allowed files. Reject changes outside them (do not apply them; fix by hand or re-assign with a narrower task). Apply the accepted diff to the PR branch, re-run the focused tests yourself, then commit. Integration calls count as delegation cost.
+4. **Do it yourself instead** when any holds: the fixes are smaller than writing the task file (for example a few lines in total); a decision is split and Root must check while fixing; launch approval, a Writer slot or Herdr is unavailable. State the reason for not delegating in one sentence in the completion report (not in `work.json` `plan`).
+5. **Break-even guide (provisional, from the Issue #72 evaluation):** one Writer round costs Root about 10 calls (task file, launch, `result.md`, diff scope check, apply, re-test, commit, finish). Delegate only when doing the fixes yourself would take more calls than that, for example three or more FIX items that each need code and test edits in different files. In the recorded post-PR work of Issues #40, #63 and #71, Root's own edit and test calls were 4–5 per Issue, below this line; only #43 (29 calls) was above it. Revisit this guide from operating records.
+
 ## Child handoff
 
 Ask child agents to end with five compact lines:
