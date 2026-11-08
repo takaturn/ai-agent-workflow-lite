@@ -26,6 +26,8 @@ done
 [[ -e "$TEST_DIR/a.started" && -e "$TEST_DIR/b.started" ]] || exit 90
 if [[ ${DELAY_B:-0} == 1 && $id == b ]]; then sleep .3; fi
 printf 'result-%s\n' "$id"
+# Issue #71: the result.md location line must stay attributable like the screen read.
+printf 'Result: path=/state/run.%s/result.md bytes=9\n' "$id"
 printf 'summary-%s\n' "$id" >&2
 [[ ${FAIL_A:-0} != 1 || $id != a ]] || exit 17
 touch "$TEST_DIR/$id.finished"
@@ -38,6 +40,8 @@ run >"$tmp/out" 2>"$tmp/err"
 grep -q '^\[a issue=51\] result-a$' "$tmp/out"
 grep -q '^\[b issue=51\] result-b$' "$tmp/out"
 grep -q '^\[a issue=51\] summary-a$' "$tmp/out"
+grep -q '^\[a issue=51\] Result: path=/state/run.a/result.md bytes=9$' "$tmp/out"
+grep -q '^\[b issue=51\] Result: path=/state/run.b/result.md bytes=9$' "$tmp/out"
 rm "$tmp/a.finished" "$tmp/b.finished"
 if FAIL_A=1 run >"$tmp/out" 2>"$tmp/err"; then exit 1; fi
 grep -q 'worker=a issue=51 runner_exit=17' "$tmp/out"

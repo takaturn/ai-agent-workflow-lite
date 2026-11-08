@@ -60,6 +60,9 @@ launch_attempted=0
 input_tokens=null
 output_tokens=null
 token_usage=null
+# JSON values; stay null unless result.md is fully written (Issue #71).
+result_path=null
+result_bytes=null
 save_summary() {
   local code=$1 elapsed
   elapsed=$(( $(date +%s) - started ))
@@ -70,12 +73,14 @@ save_summary() {
     --arg task_id "$LAUNCH_TASK_ID" --arg reservation_id "$reservation_id" \
     --argjson exit_code "$code" --argjson duration_seconds "$elapsed" \
     --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" --argjson token_usage "$token_usage" --argjson started_epoch "$started_epoch" \
+    --argjson result_path "$result_path" --argjson result_bytes "$result_bytes" \
     '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,agent_name:$agent_name,
       run_id:$run_id,parent_pane_id:$parent,worktree:$cwd,task_sha256:$task_sha256,
       task_id:$task_id,reservation_id:$reservation_id,
       phase:$phase,root_acceptance:"pending",cleanup:"retained",close_attempted:false,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
-      input_tokens:$input_tokens,output_tokens:$output_tokens,token_usage:$token_usage,started_epoch:$started_epoch}' >"$run_dir/.summary.tmp" || return 1
+      input_tokens:$input_tokens,output_tokens:$output_tokens,token_usage:$token_usage,started_epoch:$started_epoch,
+      result_path:$result_path,result_bytes:$result_bytes}' >"$run_dir/.summary.tmp" || return 1
   mv -- "$run_dir/.summary.tmp" "$run_dir/summary.json"
 }
 checkpoint() { save_summary null || die 'cannot record run checkpoint'; }
@@ -192,7 +197,18 @@ case "$agent_status" in
   idle|done) ;;
   *) die "agent is $agent_status, not idle/done; inspect pane" ;;
 esac
-herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
+# Final reply from the child's own session record; any doubt leaves result_path null (Issue #71).
+result_tmp="$run_dir/.result.tmp"
+if result_size="$(printf '%s\n' "$task" | timeout 10 python3 "$script_dir/session-result.py" \
+    --provider "$profile" --cwd "$root" --since "$started_epoch" --out "$result_tmp" 2>/dev/null)" \
+  && [[ $result_size =~ ^[1-9][0-9]*$ ]] && mv -- "$result_tmp" "$run_dir/result.md"; then
+  result_path="$(jq -cn --arg p "$run_dir/result.md" '$p')"
+  result_bytes=$result_size
+  printf 'Result: path=%s bytes=%s\n' "$run_dir/result.md" "$result_bytes"
+else
+  rm -f -- "$result_tmp"
+  herdr agent read "$agent_name" --source recent-unwrapped --lines 120 || die 'bounded result read failed'
+fi
 # Aggregate counts only, from the child CLI's own session record; null when not exactly one match.
 # Codex records totals while running; Claude writes cost-state at exit, so finish-agent.sh retries after close.
 token_usage="$(timeout 10 python3 "$script_dir/session-tokens.py" --provider "$profile" --cwd "$root" --since "$started_epoch" 2>/dev/null)" || token_usage=null
