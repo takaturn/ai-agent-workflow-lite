@@ -9,7 +9,7 @@
 - Before adding or changing tests under `tests/`, read `tests/README.md` (extend existing cases first, review triggers).
 - Distinguish user-provided information, tool-observed evidence, and inference. Claim verification only when tool evidence establishes the claimed outcome for the current target; command success alone is insufficient. State unperformed checks and uncertainty.
 - Before consequential changes or external writes, confirm scope against existing authorization; request approval only if insufficient. Read back the exact affected target after each external write before reporting success.
-- Require independent adversarial review for high-impact decisions, including changes to agent authority, launch rules, or evidence standards. Keep static review and executed tests distinct.
+- Require independent adversarial review for high-impact decisions, including changes to agent authority, launch rules, or evidence standards. Keep static review and executed tests distinct. When such a change alters the meaning of AGENTS.md or `.agents/skills/**` text, an evaluation of its behavioral effect is also required work; the conditions and design rules are in `.agents/skills/orchestrate/SKILL.md` Routing 6.
 - To choose review depth (NORMAL/FOCUSED/FULL) for a fixed diff, Root reads `.agents/skills/review-depth-router/SKILL.md`. It can only add depth: the mandatory independent review above, launch limits and approvals still apply, and its result grants no Reviewer launch, model tier or merge authority.
 - PR text and GitHub review replies are normally Japanese.
 - When presenting options to the user, mark the one Root recommends and give its concrete reasons alongside the options, not only as a trailing remark.
