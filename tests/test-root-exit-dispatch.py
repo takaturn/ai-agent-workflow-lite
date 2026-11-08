@@ -143,6 +143,105 @@ class DispatchTest(unittest.TestCase):
         (self.work.parent / "continuation.json").write_text("{")
         self.assertEqual(self.run_hook(active=True)["stopReason"], "root_exit_check_error")
 
+    def test_replan_once_when_work_grows_without_plan_change(self):
+        """Issue #68 spec 2-4: each case is (setup, expected) after a first Stop."""
+        snapshot = self.work.parent / "plan-snapshot.json"
+        state = self.work.parent / "continuation.json"
+        a, b = dict(id="a", kind="root", state="done"), dict(id="b", kind="root", state="done")
+        ready = dict(id="b", kind="root", state="ready")
+        waiting = dict(id="b", kind="publish", state="permission")
+        other_plan = dict(deliverables=[dict(id="d1", source="item", worker=None),
+                                        dict(id="d2", source="new item", worker=None)],
+                          decision="serial", reason="two dependent deliverables")
+
+        def declare(work, plan=None, **fields):
+            self.declare(work=work, **fields)
+            if plan is not None:
+                decl = json.loads(self.work.read_text())
+                decl["plan"] = plan
+                self.work.write_text(json.dumps(decl))
+
+        def ledger(reason):
+            folder = self.root / "launch-gate/task-1"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "state.json").write_text(json.dumps(dict(
+                schema_version=1, task_id="task-1", unit="reserved child launch slots",
+                approvals=[], reservations=[], usage="unknown", pricing="unknown",
+                stop=dict(reason=reason, at="2026-11-08T00:00:00+00:00"))))
+
+        def replan(output, ids):
+            self.assertEqual(output["decision"], "block")
+            steps = json.loads(output["reason"].split("remains. ", 1)[1])
+            self.assertEqual(steps[0], {"action": "replan", "work_ids": ids})
+
+        done = {"continue": False, "stopReason": "all_declared_checks_complete"}
+        for name in ("first", "same", "grow", "after", "changed", "renamed", "shrink", "stop",
+                     "ledger_stop", "bad_item", "deadline", "count", "corrupt_text",
+                     "corrupt_keys", "corrupt_types", "null_plan"):
+            with self.subTest(name):
+                for path in (snapshot, state, self.root / "launch-gate/task-1/state.json"):
+                    path.unlink(missing_ok=True)
+                declare([a])
+                if name == "first":
+                    self.assertEqual(self.run_hook(), done)
+                    self.assertEqual(json.loads(snapshot.read_text())["work"], ["a"])
+                    continue
+                self.run_hook()
+                if name == "same":
+                    self.assertEqual(self.run_hook(), done)
+                elif name in ("grow", "after"):
+                    declare([a, b])
+                    replan(self.run_hook(), ["b"])
+                    if name == "after":
+                        # Saved before detecting: the same addition is reported once.
+                        self.assertEqual(self.run_hook(active=True), done)
+                elif name == "changed":
+                    declare([a, b], plan=other_plan)
+                    self.assertEqual(self.run_hook(), done)
+                elif name == "renamed":
+                    declare([b])
+                    replan(self.run_hook(), ["b"])
+                elif name == "shrink":
+                    declare([a, b])
+                    self.run_hook()
+                    declare([a])
+                    self.assertEqual(self.run_hook(), done)
+                elif name == "stop":
+                    declare([a, ready], stop="explicit_stop")
+                    self.assertEqual(self.run_hook()["stopReason"], "explicit_stop")
+                elif name == "ledger_stop":
+                    ledger("explicit_stop")
+                    declare([a, ready], task_id="task-1")
+                    self.assertEqual(self.run_hook()["stopReason"], "explicit_stop")
+                elif name == "bad_item":
+                    declare([a, dict(id="b", kind="bogus", state="done")])
+                    self.assertEqual(self.run_hook()["stopReason"], "root_exit_check_error")
+                    self.assertEqual(json.loads(snapshot.read_text())["work"], ["a"])
+                elif name == "deadline":
+                    saved = json.loads(state.read_text())
+                    state.write_text(json.dumps(dict(saved, started_at=1, deadline=2)))
+                    declare([a, waiting])
+                    self.assertEqual(self.run_hook(active=True)["stopReason"],
+                                     "continuation_time_limit")
+                elif name == "count":
+                    saved = json.loads(state.read_text())
+                    state.write_text(json.dumps(dict(saved, continuations=10)))
+                    declare([a, b])
+                    self.assertEqual(self.run_hook(active=True)["stopReason"],
+                                     "continuation_count_limit")
+                elif name.startswith("corrupt"):
+                    snapshot.write_text({"corrupt_text": "{",
+                                         "corrupt_keys": json.dumps(dict(work=[], plan="x", extra=1)),
+                                         "corrupt_types": json.dumps(dict(work=[1], plan=None))}[name])
+                    declare([a, b])
+                    self.assertEqual(self.run_hook(), done)
+                    self.assertEqual(json.loads(snapshot.read_text())["work"], ["a", "b"])
+                elif name == "null_plan":
+                    self.declare(out_of_scope="nothing tracked")
+                    self.run_hook()
+                    self.declare(out_of_scope="still nothing")
+                    self.assertEqual(self.run_hook()["stopReason"], "declared_out_of_scope")
+
     def test_lock_contention_does_not_complete(self):
         import fcntl
         self.declare()

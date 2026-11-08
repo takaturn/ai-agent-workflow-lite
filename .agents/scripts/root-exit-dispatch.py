@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """User-level Codex SessionStart/Stop hook: find the Root automatically and run the exit check."""
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -52,6 +53,8 @@ def guide(path, session):
             "mark done only after verifying it. Before implementing or delegating, write one deliverable "
             "per deliverable item of the Issue body (not one per Issue). For serial, every worker is null; "
             "for parallel, exactly two workers, each the id of a child_launch work item. "
+            "When work is added later, re-list the deliverables and re-decide serial/parallel in plan; "
+            'a Stop that sees new work ids with an unchanged plan blocks once with action "replan". '
             "Child runs from this pane are collected automatically. "
             'If this session has no task to track, set "out_of_scope" to a short reason, "work" to [] '
             'and "plan" to null. '
@@ -79,6 +82,48 @@ def write_state(path, state):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def plan_digest(plan):
+    canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def previous_snapshot(path):
+    """A missing or malformed snapshot counts as no previous Stop (Issue #68, spec 4)."""
+    try:
+        value = checker.load(path)
+        checker.exact(value, "work plan")
+        checker.require(isinstance(value["work"], list)
+                        and all(isinstance(i, str) for i in value["work"]))
+        checker.require(isinstance(value["plan"], str))
+        return value
+    except (ValueError, OSError, TypeError, KeyError, RecursionError):
+        return None
+
+
+def replan(result, decl, path):
+    """Block once when work ids were added since the last Stop but the plan is unchanged.
+
+    Runs after inspect() validated the work items, so a failed save fails closed and
+    the result still goes through hook_decision() for stops, deadline and count limits.
+    """
+    previous = previous_snapshot(path)
+    current = {"work": [checker.identity(i["id"]) for i in decl["work"]],
+               "plan": plan_digest(decl["plan"])}
+    # Save before detecting so the same addition is reported only once.
+    write_state(path, current)
+    # Stops (work.json or launch-gate explicit_stop) keep priority; only
+    # completion or waiting-only results are turned into a replan.
+    if previous is None or decl["plan"] is None or result["reason"] not in (
+            "executable_work", "blocked_work", "all_declared_checks_complete"):
+        return result
+    added = [i for i in current["work"] if i not in previous["work"]]
+    if not added or current["plan"] != previous["plan"]:
+        return result
+    step = {"action": "replan", "work_ids": added}
+    return {"outcome": "incomplete", "reason": "executable_work",
+            "next": [step] + result["next"], "blocked": result.get("blocked", [])}
 
 
 def stop(event, session, pane, root):
@@ -122,6 +167,7 @@ def stop(event, session, pane, root):
                 return {"decision": "block", "reason": "work.json is invalid. " + guide(work, session)}
             runs = checker.owned_runs(root, pane, decl["task_id"], began.stat().st_mtime)
             result = checker.inspect(decl, runs, checker.ledger_for(root, decl["task_id"]))
+            result = replan(result, decl, directory / "plan-snapshot.json")
             output, state = checker.hook_decision(result, state, now)
         write_state(state_path, state)
     return output
