@@ -26,7 +26,7 @@ class PublicationTest(unittest.TestCase):
         self.bin = self.root/'bin'
         self.bin.mkdir()
         scanner = self.bin/'gitleaks'
-        scanner.write_text('#!/usr/bin/env python3\nimport os,sys\ndata=sys.stdin.buffer.read()\nprint("scanner diagnostic must stay private")\nsys.exit(int(os.environ.get("SCAN_EXIT", "0")) or (1 if b"fixture-sensitive" in data else 0))\n')
+        scanner.write_text('#!/usr/bin/env python3\nimport os,sys\ndata=sys.stdin.buffer.read()\nif os.environ.get("SCAN_CHANGES"): open(os.environ["SCAN_CHANGES"],"w").write("Changed during scan\\n")\nprint("scanner diagnostic must stay private")\nsys.exit(int(os.environ.get("SCAN_EXIT", "0")) or (1 if b"fixture-sensitive" in data else 0))\n')
         scanner.chmod(0o700)
         self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
                         XDG_STATE_HOME=str(self.root/'state'))
@@ -65,6 +65,14 @@ class PublicationTest(unittest.TestCase):
         self.assertFalse(self.marker.exists())
         new_receipt=self.prepare()
         self.assertEqual(self.invoke('publish','--receipt',new_receipt).returncode,0)
+        # The scanner changes the policy synchronously during the publish scan,
+        # so only the re-check just before dispatch can block it (#62).
+        self.marker.unlink()
+        last_receipt=self.prepare()
+        self.env['SCAN_CHANGES']=str(self.policy.work/'AGENTS.md')
+        self.assertNotEqual(self.invoke('publish','--receipt',last_receipt).returncode,0)
+        self.assertEqual((self.policy.work/'AGENTS.md').read_text(),'Changed during scan\n')
+        self.assertFalse(self.marker.exists())
 
     def test_unreviewed_and_missing_receipt_block(self):
         self.assertNotEqual(self.invoke('prepare').returncode, 0)
@@ -128,10 +136,14 @@ class PublicationTest(unittest.TestCase):
         return git, git('rev-parse', 'HEAD').decode().strip()
 
     def test_git_options_and_invalid_ranges_block(self):
-        self.git_fixture()
+        git, base = self.git_fixture()
+        self.body.write_text('second commit\n')
+        git('add', 'body.txt'); git('commit', '-qm', 'second')
         with tempfile.TemporaryDirectory() as state:
             self.env['XDG_STATE_HOME'] = state
-            for revision in ('--no-patch', 'HEAD', '..HEAD', 'HEAD..', 'HEAD...HEAD', 'HEAD..--no-patch'):
+            # base..HEAD..HEAD has valid endpoints; only the '..' count rejects it (#62).
+            for revision in ('--no-patch', 'HEAD', '..HEAD', 'HEAD..', 'HEAD...HEAD', 'HEAD..--no-patch',
+                             base+'..HEAD..HEAD'):
                 result = self.invoke('prepare', '--context-reviewed', '--git-range='+revision)
                 self.assertNotEqual(result.returncode, 0, revision)
             self.assertFalse(self.marker.exists())
@@ -194,6 +206,19 @@ class PublicationTest(unittest.TestCase):
             result = self.invoke('prepare', '--context-reviewed', '--git-range', base+'..'+oid)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('publication blocked', result.stderr)
+            self.assertFalse(self.marker.exists())
+        # NUL in the message: plain hash-object refuses it (fsck), --literally stores it (#62).
+        raw = (f'tree {tree}\nparent {base}\n'
+               'author Fixture <fixture@example.invalid> 1700000000 +0000\n'
+               'committer Fixture <fixture@example.invalid> 1700000000 +0000\n'
+               '\npublic\0message\n')
+        oid = subprocess.check_output(['git', 'hash-object', '-t', 'commit', '--literally', '-w', '--stdin'],
+            input=raw.encode(), cwd=self.root).decode().strip()
+        self.assertIn(b'\0', subprocess.check_output(['git', 'cat-file', 'commit', oid], cwd=self.root))
+        with tempfile.TemporaryDirectory() as state:
+            self.env['XDG_STATE_HOME'] = state
+            result = self.invoke('prepare', '--context-reviewed', '--git-range', base+'..'+oid)
+            self.assertNotEqual(result.returncode, 0)
             self.assertFalse(self.marker.exists())
 
     def test_missing_scanner_blocks(self):

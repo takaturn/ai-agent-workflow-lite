@@ -262,6 +262,25 @@ class PolicyGuardTest(unittest.TestCase):
             str(self.work),self.base+':refs/heads/main']).returncode,0)
         self.assertEqual(self.git('remote','add','alternate',str(alternate)).returncode,0)
         self.assertNotEqual(self.git('push','alternate','HEAD:refs/heads/feature').returncode,0)
+        # The alternate has the same base OID, so only the URL checks reject it (#62).
+        self.assertEqual(self.process(['git','--git-dir',str(alternate),'update-ref',
+            'refs/heads/main',self.remote_oid()]).returncode,0)
+        head=self.git('rev-parse','HEAD').stdout.strip()
+        line=f'HEAD {head} refs/heads/feature {"0"*len(head)}\n'
+        def pre_push(location):
+            return self.guard('pre-push','--remote-name','origin','--remote-location',location,input=line)
+        self.assertEqual(pre_push(str(self.remote)).returncode,0)
+        self.assertEqual(pre_push(str(alternate)).returncode,2)
+        self.assertEqual(self.git('remote','set-url','--add','--push','origin',str(self.remote)).returncode,0)
+        self.assertEqual(self.git('remote','set-url','--add','--push','origin',str(alternate)).returncode,0)
+        self.assertEqual(pre_push(str(self.remote)).returncode,2)
+        self.assertEqual(self.git('config','--unset-all','remote.origin.pushurl').returncode,0)
+        # Same approved content without shared history is still unrelated (#62).
+        orphan=self.git('commit-tree','HEAD^{tree}','-m','orphan').stdout.strip()
+        self.assertEqual(self.guard('pre-push','--remote-name','origin','--remote-location',str(self.remote),
+            input=f'{orphan} {orphan} refs/heads/orphan {"0"*len(orphan)}\n').returncode,2)
+        self.assertNotEqual(self.push(orphan+':refs/heads/orphan').returncode,0)
+        self.assertIsNone(self.remote_oid('refs/heads/orphan'))
 
     def test_unapproved_intermediate_after_base_is_not_hidden(self):
         (self.work/'AGENTS.md').write_text('Unapproved intermediate\n')
