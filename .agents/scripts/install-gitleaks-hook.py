@@ -1,97 +1,93 @@
 #!/usr/bin/env python3
-"""Install without overwriting existing hooks or changing Git configuration."""
+"""Install without overwriting existing hooks or changing Git configuration.
+
+--upgrade replaces an installed hook only with the version merged into the
+remote's default branch, and only when the installed copy is a version from
+that branch's history (SPEC: Issue #85)."""
 from pathlib import Path
-import fcntl
-import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 
-
-def policy_present():
-    # The pre-#36 policy path still means a policy is present: fail closed.
-    return any(Path(name).exists() for name in
-               ('.agents/config/publication-policy.json', 'config/publication-policy.json'))
+HOOK_PATHS = ('.agents/scripts/pre-push-gitleaks.py', 'scripts/pre-push-gitleaks.py')
 
 
-def approved_previous_hook(common, installed):
-    state = json.loads((common/'workflow-policy-approvals.json').read_bytes())
+def git(*args, timeout=10):
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
-    for approval in state['approvals'][:-1]:
-        revision = approval['revision']
-        if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
-            raise ValueError('invalid approval revision')
-        prior = subprocess.run(['git', 'show', revision+':.agents/scripts/pre-push-gitleaks.py'],
-                               capture_output=True, timeout=10, env=env)
-        if prior.returncode != 0:
-            # Only a revision without the moved hook (pre-#36 layout) may
-            # supply it from the legacy path, where it was protected.
-            prior = subprocess.check_output(['git', 'show',
-                revision+':scripts/pre-push-gitleaks.py'], stderr=subprocess.PIPE,
-                timeout=10, env=env)
-        else:
-            prior = prior.stdout
-        if installed == prior:
-            return True
-    return False
+    return subprocess.check_output(['git', *args], stderr=subprocess.PIPE, env=env, timeout=timeout)
 
 
-def approved_current_hook(common, source):
-    """An upgrade installs only the bytes of this repository's latest approval."""
-    state = json.loads((common/'workflow-policy-approvals.json').read_bytes())
-    revision = state['approvals'][-1]['revision']
-    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
-        raise ValueError('invalid approval revision')
-    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
-    approved = subprocess.check_output(['git', 'show', revision+':.agents/scripts/pre-push-gitleaks.py'],
-                                       stderr=subprocess.PIPE, timeout=10, env=env)
-    return source == approved
+def default_base(remote):
+    """The fetched default branch of remote, verified against the remote itself."""
+    if remote not in git('remote').decode().splitlines():
+        raise ValueError('upgrade remote must be a configured remote')
+    urls = git('remote', 'get-url', '--push', '--all', remote).decode().splitlines()
+    if len(urls) != 1:
+        raise ValueError('upgrade remote must have one push location')
+    # Only the default branch counts as merged; no base override is accepted.
+    if subprocess.run(['git', 'config', '--get', 'workflow.baseBranch'],
+                      capture_output=True).returncode != 1:
+        raise ValueError('base branch override is not accepted')
+    prefix = f'refs/remotes/{remote}/'
+    ref = git('symbolic-ref', '--quiet', prefix+'HEAD').decode().strip()
+    if not ref.startswith(prefix) or ref == prefix+'HEAD':
+        raise ValueError('invalid default branch')
+    remote_ref = 'refs/heads/' + ref[len(prefix):]
+    git('check-ref-format', remote_ref)
+    base = git('rev-parse', '--verify', '--end-of-options', ref+'^{commit}').decode().strip()
+    # The remote itself must name this branch as its HEAD, so a retargeted or
+    # stale local symref cannot select an unmerged branch.
+    advertised = git('ls-remote', '--quiet', '--exit-code', '--symref',
+                     urls[0], 'HEAD', remote_ref, timeout=60).decode('ascii').splitlines()
+    if sorted(advertised) != sorted([f'ref: {remote_ref}\tHEAD', f'{base}\tHEAD',
+                                     f'{base}\t{remote_ref}']):
+        raise ValueError('fetched default branch does not match remote HEAD')
+    return base
+
+
+def merged_versions(base):
+    """Every hook version (current and pre-#36 path) in the base branch history."""
+    versions = set()
+    for commit in git('rev-list', '--full-history', base, '--', *HOOK_PATHS, timeout=60).decode('ascii').split():
+        for name in HOOK_PATHS:
+            shown = subprocess.run(['git', 'show', f'{commit}:{name}'], capture_output=True,
+                timeout=10, env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull))
+            if shown.returncode == 0:
+                versions.add(shown.stdout)
+    return versions
 
 
 def main():
     try:
-        if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] != '--upgrade-approved'):
+        args = sys.argv[1:]
+        upgrade = args[:1] == ['--upgrade']
+        if upgrade:
+            args = args[1:]
+        remote = 'origin'
+        if upgrade and len(args) == 2 and args[0] == '--remote':
+            remote, args = args[1], []
+        if args:
             raise ValueError('unsupported installer option')
-        upgrade = len(sys.argv) == 2
         configured = subprocess.run(['git', 'config', '--get', 'core.hooksPath'],
                                     capture_output=True)
         if configured.returncode != 1:
             raise ValueError('existing hook configuration or Git error')
-        common = Path(subprocess.check_output(['git', 'rev-parse', '--git-common-dir'],
-                      stderr=subprocess.PIPE).decode().strip())
+        common = Path(git('rev-parse', '--git-common-dir').decode().strip())
         if any(parent.is_symlink() for parent in (common, *common.parents)):
             raise ValueError('common Git directory symlink')
-        if upgrade:
-            lock_path = common/'.workflow-policy.lock'
-            if lock_path.is_symlink():
-                raise ValueError('policy lock symlink')
-            lock = lock_path.open('a')
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        state = common/'workflow-policy-approvals.json'
-        if policy_present() and not state.exists():
-            chosen = subprocess.run(['git', 'config', '--get', 'workflow.policyRemote'],
-                                    capture_output=True, text=True)
-            if chosen.returncode not in (0, 1):
-                raise ValueError('invalid policy remote configuration')
-            remote = chosen.stdout.strip() if chosen.returncode == 0 else 'origin'
-            subprocess.run([sys.executable, '.agents/scripts/policy-guard.py', 'bootstrap',
-                            '--remote-name', remote], check=True,
-                           capture_output=True, timeout=60)
-        if state.exists() or policy_present():
-            subprocess.run([sys.executable, str(common/'hooks/workflow-policy-guard.py'), 'check'],
-                           check=True, capture_output=True, timeout=10)
-        hook = Path(subprocess.check_output(['git', 'rev-parse', '--git-path',
-                    'hooks/pre-push'], stderr=subprocess.PIPE).decode().strip()).absolute()
+        hook = Path(git('rev-parse', '--git-path', 'hooks/pre-push').decode().strip()).absolute()
         if any(parent.is_symlink() for parent in (hook.parent, *hook.parent.parents)):
             raise ValueError('hook parent symlink')
         source = Path(__file__).resolve().with_name('pre-push-gitleaks.py').read_bytes()
-        if upgrade and not approved_current_hook(common, source):
-            raise ValueError('replacement hook is not the approved version')
+        if upgrade:
+            base = default_base(remote)
+            if source != git('show', base+':'+HOOK_PATHS[0]):
+                raise ValueError('replacement hook is not the default branch version')
         if hook.is_symlink():
             raise ValueError('existing symlink')
-        if hook.exists():
+        replacing = hook.exists()
+        if replacing:
             if not hook.is_file() or not os.access(hook, os.X_OK):
                 raise ValueError('existing hook is not executable regular file')
             installed = hook.read_bytes()
@@ -99,11 +95,11 @@ def main():
             if installed == source:
                 print('pre-push: identical executable hook already installed')
                 return 0
-            if not upgrade or not approved_previous_hook(common, installed):
-                raise ValueError('existing hook is not a prior approved version')
+            if not upgrade or installed not in merged_versions(base):
+                raise ValueError('existing hook is not a merged prior version')
         hook.parent.mkdir(parents=True, exist_ok=True)
-        # The normal path creates exclusively. A requested, approved upgrade
-        # atomically replaces only a verified older copy, with no absent gap.
+        # The normal path creates exclusively. A requested upgrade atomically
+        # replaces only a verified older copy, with no absent gap.
         fd, staged = tempfile.mkstemp(prefix='.pre-push-', dir=hook.parent)
         try:
             with os.fdopen(fd, 'wb') as stream:
@@ -111,7 +107,7 @@ def main():
                 stream.flush()
                 os.fchmod(stream.fileno(), 0o700)
                 os.fsync(stream.fileno())
-            if upgrade and hook.exists():
+            if replacing:
                 after = hook.stat(follow_symlinks=False)
                 identity = lambda stat: (stat.st_dev, stat.st_ino, stat.st_size,
                                          stat.st_mtime_ns, stat.st_mode)

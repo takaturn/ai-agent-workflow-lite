@@ -7,9 +7,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-POLICIES = ('.agents/config/publication-policy.json', 'config/publication-policy.json')
-
-
 class UnsupportedSubmodule(ValueError):
     pass
 
@@ -86,18 +83,6 @@ def main():
         if len(sys.argv) != 3:
             raise ValueError('not a Git pre-push invocation')
         lines = sys.stdin.read().splitlines()
-        common = Path(git('rev-parse', '--git-common-dir').decode().strip())
-        state = common/'workflow-policy-approvals.json'
-        # The pre-#36 policy path still means a policy is present: fail closed.
-        if state.exists() or any(Path(name).exists() for name in POLICIES):
-            guard = common/'hooks/workflow-policy-guard.py'
-            result = subprocess.run([sys.executable, str(guard), 'pre-push',
-                                     '--remote-name', sys.argv[1],
-                                     '--remote-location', sys.argv[2]],
-                input='\n'.join(lines)+'\n', text=True, capture_output=True, timeout=60)
-            if result.returncode:
-                print('pre-push: unapproved policy change or policy guard failure; push blocked', file=sys.stderr)
-                return 2
         index = git('ls-files', '--stage', '-z')
         if any(entry.startswith(b'160000 ') for entry in index.split(b'\x00')):
             raise UnsupportedSubmodule()
