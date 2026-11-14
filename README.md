@@ -94,7 +94,7 @@ python3 tests/test-launch-gate.py
 
 計画の形式は `{"task_id": "<task-id>", "launches": [{"provider": "...", "model": "...", "count": N}]}` です。同じ内容を別の承認として追加するときは、任意の `label`（英数字・`_`・`-`）を変えます。経路は常に `run-agent` です。provider/modelは英数字と `._:/+-` だけを受け付け、端末制御文字で表示を偽装できないようにします。`show-plan` は状態ディレクトリも作らず何も書かずに、正規化した計画・SHA-256・組ごとの回数と合計を表示します。`approve-plan` は計画ファイルを1回だけ読み、そのバイト列のSHA-256の先頭8文字が `--confirm` と一致した場合だけ記録します。表示後に計画が差し替えられていれば、先頭8文字（32ビット）が偶然一致しない限り記録されません。一致した場合は、1つのlockの中で全組を検証して状態ファイルへ1回だけ書き込み、1組でも失敗すれば何も書きません。承認参照は `<SHA-256先頭16文字>-<組の番号>` なので、同じ計画を再記録しても二重に数えません。確認記録にあるSHA-256の計画は再利用できません（計画ファイル自体は移動・削除しません）。確認記録は状態ファイルより先に開き、開けなければ何も記録しません。状態の保存後・確認記録の追記完了前に異常終了した場合は、同じ計画を再実行すると枠は増えず、確認記録だけが補われます（途中で切れた末尾行は無視します）。1計画の合計は20回までです。状態ファイルの形式と承認レコードの項目は変わりません。
 
-Rootは `approve-plan` を自分で実行しません。Rootが計画を書き、ユーザーがプロンプト欄で `! ... show-plan ...` を実行して表示されたモデルと回数を読み、納得した場合だけ `! ... approve-plan ... --confirm <8文字>` を実行します。`--confirm` は表示を見たことの申告であり、本人の確認を証明しません。これは公開前チェックやpolicy-guardと同じ**協調的な運用ゲート**であり、同じユーザー・同じマシンでAIが同じコマンドや状態ファイルの直接編集で承認を記録することを強制的には防げません。承認の取り消しは今と同じくタスク全体の `stop` だけです。
+Rootは `approve-plan` を自分で実行しません。Rootが計画を書き、ユーザーがプロンプト欄で `! ... show-plan ...` を実行して表示されたモデルと回数を読み、納得した場合だけ `! ... approve-plan ... --confirm <8文字>` を実行します。`--confirm` は表示を見たことの申告であり、本人の確認を証明しません。これは公開前チェックと同じ**協調的な運用ゲート**であり、同じユーザー・同じマシンでAIが同じコマンドや状態ファイルの直接編集で承認を記録することを強制的には防げません。承認の取り消しは今と同じくタスク全体の `stop` だけです。
 
 各予約は `reserved` から `returned` / `failed` / `interrupted` / `prelaunch_error` に更新されます。強制終了などで `reserved` のままでも消費済みとして数え、自動返却や自動retryはしません。上限到達と明示停止は `stop.reason=limit_reached|explicit_stop` として残し、#15が参照できます。追加承認は上限到達だけを解除し、明示停止を解除しません。この停止状態は新規起動の拒否であり、稼働中の子を停止した証拠ではありません。子の所有者、実効停止能力、停止結果は別途確認してください。`LAUNCH_PATH` による経路の自己申告は受け付けません。使用量と単価は `unknown` のままであり、請求確定額や絶対的な課金上限を保証しません。
 
@@ -207,7 +207,7 @@ python3 .agents/scripts/install-gitleaks-hook.py
 python3 tests/test-gitleaks-hook.py
 ```
 
-installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。保護対象のhookをcommitし、人の端末で再承認した後、既存hookが以前の承認済みcommit内のソースと完全一致するときだけ `python3 .agents/scripts/install-gitleaks-hook.py --upgrade-approved` で更新できます。更新時は協調的な排他lockと置換直前の再照合を行い、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。承認前・未知のhook・symlink・`core.hooksPath` 設定は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
+installerは `git rev-parse --git-path hooks/pre-push` へ自己完結した実行可能なコピーを配置し、読み戻して検証します。`core.hooksPath` が既に設定済み、異なるhookが存在、symlinkやsymlinkの親ディレクトリなどの場合は上書きしません。同じコピーなら再実行はno-opです。hookの更新は `python3 .agents/scripts/install-gitleaks-hook.py --upgrade`（既定は `origin`、別のremoteは `--upgrade --remote <name>`）で行います。新しいソースがremoteの既定branch（remote自身がHEADとして示すbranch）の版と完全一致し、既存hookがその既定branchの履歴にある版（Issue #36 以前の `scripts/pre-push-gitleaks.py` を含む）と完全一致するときだけ置き換えます。手元の `refs/remotes/<remote>/HEAD` が指すbranchとOIDは `ls-remote --symref` でremoteのHEADと照合し、手元のsymrefの付け替えや `workflow.baseBranch` による上書きは受け付けません。`--upgrade` で置き換わるのはmerge済みのhookだけです。通常の導入（`--upgrade` なし）は、既存hookがない場合に手元のソースをそのまま入れます。置換直前に既存hookを再照合し、`os.replace` で途切れず置換します。同一ユーザーの非協調的な同時変更を防ぐOSの隔離ではありません。未知のhook・symlink・`core.hooksPath` 設定・既定branchにない版は拒否します。更新後も実体一致を読み戻します。コピーはbranch切替に依存せず、共通Git directoryを使うlinked worktree全体に適用されます。cloneごとに導入が必要です。新規cloneの送信元準備では上記installerを実行し、成功と実行可能なhookの一致を確認してからpushを許可します。リポジトリへの配置やCI成功だけでhookは有効になりません。未導入cloneや受信側の制御は未検証であり、全送信者を保護したとは扱いません。
 
 新規refは到達可能な全commit履歴、既存refはGitが通知する旧OIDから新OIDへの追加履歴を検査します。旧OIDをローカルで解決できなければ新OIDの履歴全体を検査します。複数ref、force push、途中で削除した内容、commit message、生のcommitヘッダー/mergetag、merge固有差分、annotated tag messageも対象です。表示用の色付けやreplace/graftを無効化して元のobjectを検査します。shallow cloneは履歴未確認として拒否します。commitへ解決できないtag、binary patch/non-UTF8など未対応入力は拒否します。submoduleを含むindex/送信履歴は、親hookで子の送信先を保護できないため未対応として拒否します（設定・CLI両方の再帰pushを含む）。refの削除は新しい内容を送らないため検査対象外です。
 
@@ -241,30 +241,29 @@ raw CLIによる迂回、対象の列挙漏れ、確認後に別プロセスが�
 
 ユーザーと合意した今回の到達点は、repo管理・AGENTS.mdの禁止ルール・hookによる誤操作防止です。同じ主体による意図的な無効化、未導入clone、raw API投稿などを技術的に排除する保証はありません。この残存リスクを受容した範囲で受入を判断し、Root全面隔離や迂回不能を達成したとは扱いません。post-push CIを公開前防止の代わりにしません。
 
-`.agents/config/publication-policy.json` は保護対象を列挙します。新規cloneでは、送信先のbaseブランチと一致する保護対象だけを `bootstrap` が確認し、再作成可能なローカル状態とguardのコピーを作ります。installerは状態がないときにこの処理を呼びます。feature側で保護対象を変更した場合は、文脈確認とユーザー承認後に正確なcommitを別途承認します。
+`.agents/config/publication-policy.json` は保護対象を列挙します。保護対象を変更したcommitも、ローカルの承認なしにcommit・push・PR作成できます。人の確認はPRのmergeに一本化しています（Issue #85）。一覧は次の3か所で使います。
 
-```sh
-python3 .agents/scripts/install-gitleaks-hook.py
-# 保護対象の正確なcommitを人が承認した後、人の端末で実行する（初回移行のcommitのみ人手）
-python3 .agents/scripts/policy-guard.py approve --approval-ref '<一意な承認参照>'
-python3 .agents/scripts/install-gitleaks-hook.py --upgrade-approved
-python3 tests/test-policy-guard.py
-```
+- CIの `protected-changes` jobが、pull_requestで保護対象に当たる変更ファイルの一覧をjob summaryへ表示します（`.agents/scripts/protected-changes.py`）。一覧はbase commitとPR側の `publication-policy.json` の和集合で、script はbase commitの版を実行するので、PRが一覧やscriptを書き換えても通知は消えません。ただしpull_requestではworkflow定義自体はPR側のものが使われ、`.github/workflows` は保護対象に含まれないため、PRがworkflowを書き換えた場合の表示は信頼できません。該当があってもCIは失敗しません。
+- 公開前チェックが、prepareからpublishの間に保護対象が変わったら送信を止めます。
+- `review-depth-router` のSECURITY_GATEです。
 
-`approve` は明示承認の申告で、認証ではありません。`bootstrap` は選択したbaseにないfeatureの変更を承認せず、作業ツリーの保護対象とguardソースが照合済みbaseと完全一致する場合だけ、baseの受入状態をローカルに再構成します。baseが進んで既存状態と異なるときは、人の端末から `python3 .agents/scripts/policy-guard.py bootstrap --remote-name origin` を実行します。状態ファイルが消えてもbaseと一致する内容は再構成できます。baseと異なるfeature変更の承認記録が消えた場合は停止し、その正確なcommitの再承認が必要です。未commitの保護対象、参照の使い回し、symlink、未知の既存guardの上書きを拒否します。状態とguardのコピーはcommon Git directoryでlinked worktree間に共有します。保護対象の一覧変更は自動移行せず、別途レビューした手動移行が必要です。例外として、Issue #36 の `config/`・`scripts/` から `.agents/` への移動だけは、`approve` が旧パスの承認記録を退避せずにその場で移行し、旧パスでの承認済みhookも `--upgrade-approved` で更新できます。承認記録は退避しないでください。承認記録は共通Git directoryでlinked worktree間に共有されるため、移行後は旧layoutのままのworktreeも新しい保護対象で検査され、rebaseと再承認が必要になります。
+mainのrulesetはPR必須・必要承認数0です。AIが `gh pr merge` を実行しないことはAGENTS.mdの協調的な運用ルールで、技術的には強制されません。repoはpublicなので、ルールを弱めたcommitもfeature branchへのpush時点で公開されます。mainに入るのを止めるのは人のmergeだけです。秘密情報は従来どおりGitleaksが止めます。AIが作業中に保護対象を書き換えてその場で従うことや、導入済みの `.git/hooks/pre-push` を直接書き換えることは、以前のguardでも防げていませんでした。
 
-policy guardは送信commitの保護対象を承認済みsnapshotと比較します。途中の無断変更を後で戻しても拒否します。新規・既存refとも、登録済みの送信先remoteのbaseブランチから到達できないcommitを検査します。baseブランチに含まれるcommitは受入済みと扱い、base専用の人手承認記録は作りません。既定のbaseは `refs/remotes/<remote>/HEAD` です。`develop` などをbaseにする場合は `git -c workflow.baseBranch=develop push ...` と指定します。どのbranchを受入済みbaseとするかは利用者の運用判断で、Rootが公開前に確認します。guardは送信先のbase refが示すOIDと手元のremote-tracking refを照合し、不一致・欠落・無関係な履歴では停止します。この照合は別接続なので、push時の受信側状態を原子的に証明しません。Gitleaksのnative pre-push検査は新規refの全到達可能履歴を引き続き対象にします。各pushの公開前確認も省略しません。通常ファイルの変更には追加承認不要です。
-
-`.claude/settings.json`（Claude Code）と `.codex/hooks.json`（Codex）のPreToolUseも同じ承認状態を確認し、未承認の保護対象変更を通知し、既存権限内のローカル修正・検証・commitを継続できます。承認記録破損・実効guard不一致・対象識別失敗は拒否します。**最初の編集を事前に禁止する実装ではありません。** 保護対象の正当な更新は、AIが修正・検証・commitを担当でき、人が正確なcommitを確認・承認して再承認コマンドを実行します。公開ラッパーは明示policy rootの承認済みguardをprepare時と送信直前に検査し、未承認変更の公開を拒否します。Rootはhookを止めて更新しません。hook設定や信頼状態自体は変更できるため、OSのアクセス制御ではありません。
-
-Claude Codeのproject hookは、workspaceを信頼したうえで `/hooks` で定義が読み込まれていることを確認して初めて有効と扱います。設定ファイルの配置だけでは有効と報告しません。`disableAllHooks` などのユーザー設定で無効化できる点はAGENTS.mdの受容済みリスクです。Codex profileを使う場合は、Codexの `/hooks` で定義を確認・trustします。エラー/timeoutがCLI側でfail-openになる可能性もあり、native pre-pushの拒否確認と各CLI実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
+Claude Codeのproject hook（`matcher: "Agent"` の委譲手段hook）は、workspaceを信頼したうえで `/hooks` で定義が読み込まれていることを確認して初めて有効と扱います。設定ファイルの配置だけでは有効と報告しません。`disableAllHooks` などのユーザー設定で無効化できる点はAGENTS.mdの受容済みリスクです。エラー/timeoutがCLI側でfail-openになる可能性もあり、native pre-pushの拒否確認と各CLI実機の拒否確認は分けます。グローバル設定は変更しません。[Codex hook仕様](https://learn.chatgpt.com/docs/hooks)
 
 
 ## 隔離publisherの実装
 
 `.agents/scripts/publisher.py`、`publisher-sandbox.py`、`install-publisher.py` と隔離fixtureは検討過程のプロトタイプとして残しています。[実装した契約・未検証範囲](.agents/docs/publisher-boundary.md)を参照してください。現在のRoot/host toolの権限は変わっていません。今回の受入や通常の公開手順にpublisherの配備・Root切替は要求せず、拡張もしません。
 
-### 既存guardからの一度限りの移行
-旧実効guardは保護対象変更時にtoolを拒否するため、今回の候補の適用・検証・commit・正確なcommitへの再承認は人の端末で一度に実施する。旧guardを無効化・削除せず、再承認が新guardを配置した後に、AIのローカル更新が可能となる。旧hookコマンドの互換呼出しは維持する。移行前からAIがcommitできるとは主張しない。
+### 既存cloneの移行（Issue #85）
 
-公開receiptはpolicy root・common directory・実効guard・承認state・現在の保護対象snapshotを固定する。承認やsnapshotが変わったら文脈確認とprepareからやり直す。Wiki公開のpolicy rootは作業を管理する本体を指定する。
+Issue #85 より前に導入したcloneには、承認状態とguardのコピー、guardを呼ぶ旧pre-push hookが残っています。次の順で移行します。
+
+1. Issue #85 のPRをpushするときは、旧pre-pushが送信commitを1つずつ承認済みsnapshotと照合します。PRを1 commitにsquashしてから、人が承認します。承認後にレビューの修正をpushする場合は、旧hookが残っている間はsquashと承認をやり直します。PRのHEADでは `policy-guard.py` が削除済みなので、導入済みのguardを使います: `python3 "$(git rev-parse --git-common-dir)/hooks/workflow-policy-guard.py" approve --approval-ref <参照>`
+2. 手順3はmerge直後、ほかのworktreeのrebaseより先に行えます。merge後、全worktreeをmerge後のcommitへrebase（または作り直し）してから、全sessionを再起動します。Codexはhook定義の再trustが要ります。旧 `.claude/settings.json` を持つworktreeが残ったまま手順4に進むと、そのworktreeのtool呼び出しがすべて拒否されます。
+3. merge後のcommitにあるworktreeで（旧worktreeのinstallerは旧仕様のため使わない）、`git fetch origin` と `git remote set-head origin --auto` のあと `python3 .agents/scripts/install-gitleaks-hook.py --upgrade` でpre-push hookを更新し、`.git/hooks/pre-push` が新しいソースと完全一致することを確かめます（`cmp "$(git rev-parse --git-common-dir)/hooks/pre-push" .agents/scripts/pre-push-gitleaks.py`）。
+4. 最後に共通Git directoryの `workflow-policy-approvals.json`、`hooks/workflow-policy-guard.py`、`.workflow-policy.lock` を削除します。
+5. 移行が済んだら、別のPRで `publication-policy.json` から `.agents/scripts/policy-guard.py` のentryを外します。
+
+公開receiptはpolicy root・common directory・現在の保護対象snapshotを固定します。snapshotが変わったら文脈確認とprepareからやり直します。Wiki公開のpolicy rootは作業を管理する本体を指定します。

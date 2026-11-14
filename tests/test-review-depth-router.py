@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 
-# Bytecode caches under .agents/skills would break the policy-guard snapshot.
+# Bytecode caches under .agents/skills must not enter the protected-path snapshot.
 sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).resolve().parents[1] / ".agents/skills/review-depth-router/scripts/decide.py"
 spec = importlib.util.spec_from_file_location("decide", SCRIPT)

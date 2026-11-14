@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Model-free publication gate tests; all dispatches are local fixture commands."""
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,15 +10,30 @@ import tempfile
 import unittest
 
 GATE = Path(__file__).resolve().parents[1]/'.agents/scripts/publication-check.py'
-# Loaded once so that the approved fixture is built once per module.
-spec = importlib.util.spec_from_file_location('policy_fixture', GATE.parents[2]/'tests/test-policy-guard.py')
-policy_fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(policy_fixture)
+POLICY = GATE.parents[1]/'config/publication-policy.json'
+
+
+class PolicyRoot:
+    """A plain repository with the real protected path list; no approval state (#85)."""
+    def __init__(self, test):
+        tmp = tempfile.TemporaryDirectory()
+        test.addCleanup(tmp.cleanup)
+        self.work = Path(tmp.name).resolve()/'work'
+        subprocess.run(['git', 'init', '-q', str(self.work)], check=True)
+        (self.work/'.agents/config').mkdir(parents=True)
+        (self.work/'.agents/config/publication-policy.json').write_bytes(POLICY.read_bytes())
+        (self.work/'AGENTS.md').write_text('Fixture rules\n')
+        self.commit_all('policy')
+
+    def commit_all(self, message):
+        for args in (['add', '.'], ['commit', '-qm', message]):
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            *args], cwd=self.work, check=True)
 
 
 class PublicationTest(unittest.TestCase):
     def setUp(self):
-        self.policy = policy_fixture.approved_copy(policy_fixture.PolicyGuardTest())
-        self.addCleanup(self.policy.doCleanups)
+        self.policy = PolicyRoot(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -46,23 +60,15 @@ class PublicationTest(unittest.TestCase):
         self.assertNotIn('diagnostic', result.stdout+result.stderr)
         return result.stdout.strip()
 
-    def test_unapproved_policy_blocks_prepare_and_dispatch(self):
+    def test_protected_change_after_prepare_blocks_dispatch(self):
         receipt = self.prepare()
-        (self.policy.work/'AGENTS.md').write_text('Unapproved change\n')
-        self.assertNotEqual(self.invoke('prepare','--context-reviewed').returncode,0)
+        (self.policy.work/'AGENTS.md').write_text('Changed after prepare\n')
         self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
         self.assertFalse(self.marker.exists())
-        self.policy.commit_all('local commit is not approval')
+        self.policy.commit_all('a commit does not restore the snapshot')
         self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
         self.assertFalse(self.marker.exists())
-
-    def test_new_approval_invalidates_old_receipt(self):
-        receipt=self.prepare()
-        (self.policy.work/'AGENTS.md').write_text('Human approved new policy\n')
-        self.policy.commit_all('new policy')
-        self.assertEqual(self.policy.guard('approve','--approval-ref','new-human-approval').returncode,0)
-        self.assertNotEqual(self.invoke('publish','--receipt',receipt).returncode,0)
-        self.assertFalse(self.marker.exists())
+        # No local approval exists: a fresh prepare of the changed policy publishes.
         new_receipt=self.prepare()
         self.assertEqual(self.invoke('publish','--receipt',new_receipt).returncode,0)
         # The scanner changes the policy synchronously during the publish scan,
@@ -73,6 +79,21 @@ class PublicationTest(unittest.TestCase):
         self.assertNotEqual(self.invoke('publish','--receipt',last_receipt).returncode,0)
         self.assertEqual((self.policy.work/'AGENTS.md').read_text(),'Changed during scan\n')
         self.assertFalse(self.marker.exists())
+
+    def test_policy_root_must_be_a_worktree_root(self):
+        # A subdirectory with its own policy copy is still not a policy root.
+        nested = self.policy.work/'nested/.agents/config'
+        nested.mkdir(parents=True)
+        (nested/'publication-policy.json').write_bytes(POLICY.read_bytes())
+        for root in (self.policy.work/'nested', self.policy.work.parent, 'list-policy'):
+            if root == 'list-policy':
+                (self.policy.work/'.agents/config/publication-policy.json').write_text('[]')
+                root = self.policy.work
+            result = subprocess.run([sys.executable, str(GATE), 'prepare', '--policy-root', str(root),
+                '--target', 'fixture:local', '--file', str(self.body), '--context-reviewed', '--', *self.command],
+                env=self.env, cwd=self.root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, root)
+            self.assertIn('publication blocked', result.stderr)
 
     def test_unreviewed_and_missing_receipt_block(self):
         self.assertNotEqual(self.invoke('prepare').returncode, 0)
