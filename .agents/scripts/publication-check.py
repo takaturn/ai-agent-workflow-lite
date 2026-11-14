@@ -109,20 +109,52 @@ def scan(payloads):
                 raise ValueError('secret scan detected a candidate or failed; publication blocked')
 
 
+POLICY = '.agents/config/publication-policy.json'
+
+
+def protected_snapshot(root):
+    """Digest of every protected file in the policy root's working tree."""
+    value = json.loads((root/POLICY).read_bytes())
+    if not isinstance(value, dict):
+        raise ValueError('invalid protected path policy')
+    paths = value.get('protected_paths')
+    if value.get('version') != 1 or not isinstance(paths, list) or not paths:
+        raise ValueError('invalid protected path policy')
+    entries = {}
+    for name in paths:
+        if (not isinstance(name, str) or not name or Path(name).is_absolute() or
+                any(part in ('', '.', '..') for part in name.split('/'))):
+            raise ValueError('invalid protected path')
+        candidate = root/name
+        if any(parent.is_symlink() for parent in (candidate, *candidate.parents)):
+            raise ValueError('protected symlink')
+        for path in (sorted(candidate.rglob('*')) if candidate.is_dir() else [candidate]):
+            if path.is_symlink():
+                raise ValueError('protected symlink')
+            if not path.exists() or path.is_dir():
+                continue
+            if not path.is_file():
+                raise ValueError('unsupported protected entry')
+            # Python bytecode caches are never published; they must not block (#30).
+            if path.suffix == '.pyc' and path.parent.name == '__pycache__':
+                continue
+            mode = '100755' if path.stat().st_mode & 0o111 else '100644'
+            entries[str(path.relative_to(root))] = [mode, digest(path.read_bytes())]
+    return digest(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode())
+
+
 def check_policy(root):
     root = Path(root)
     if not root.is_absolute() or root.resolve() != root:
         raise ValueError('canonical policy root required')
+    top = Path(subprocess.check_output(['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+        stderr=subprocess.PIPE, timeout=10).decode().strip()).resolve()
+    if top != root:
+        raise ValueError('policy root must be a worktree root')
     common = Path(subprocess.check_output(['git', '-C', str(root), 'rev-parse',
         '--path-format=absolute', '--git-common-dir'], stderr=subprocess.PIPE,
         timeout=10).decode().strip())
-    guard = common/'hooks/workflow-policy-guard.py'
-    if guard.is_symlink() or not guard.is_file():
-        raise ValueError('approved installed guard required')
-    identity = subprocess.check_output([sys.executable, str(guard), 'identity'], cwd=root,
-        stderr=subprocess.PIPE, timeout=10)
-    return {'root': str(root), 'common': str(common), 'guard': digest(guard.read_bytes()),
-            'policy': json.loads(identity)}
+    return {'root': str(root), 'common': str(common), 'snapshot': protected_snapshot(root)}
 
 
 def main():

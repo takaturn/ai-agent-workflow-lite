@@ -241,6 +241,117 @@ class HookTest(unittest.TestCase):
         self.assertIn('pre-push:', result.stderr)
         self.assertIsNone(self.remote_oid())
 
+    def test_protected_change_and_stale_guard_push_without_approval(self):
+        """Old approval state and guard remain after #85: the hook never calls them."""
+        common=self.work/'.git'
+        (common/'workflow-policy-approvals.json').write_text('{"version":1,"approvals":[]}')
+        (common/'hooks/workflow-policy-guard.py').write_text('import sys\nsys.exit(2)\n')
+        policy=self.work/'.agents/config/publication-policy.json'
+        policy.parent.mkdir(parents=True)
+        policy.write_bytes((BASE/'.agents/config/publication-policy.json').read_bytes())
+        (self.work/'AGENTS.md').write_text('Changed rules without local approval\n')
+        self.assertEqual(self.git('add','.').returncode,0)
+        self.assertEqual(self.git('commit','-qm','protected change').returncode,0)
+        result=self.push()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(self.remote_oid(),self.git('rev-parse','HEAD').stdout.strip())
+        # A fresh clone with the policy installs with no approval or bootstrap.
+        fresh=self.root/'fresh'
+        self.assertEqual(self.process(['git','clone','-q','-b','main',str(self.remote),str(fresh)]).returncode,0)
+        self.assertEqual(self.install(fresh).returncode,0)
+        self.assertEqual((fresh/'.git/hooks/pre-push').read_bytes(),
+                         (BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes())
+        self.assertFalse((fresh/'.git/workflow-policy-approvals.json').exists())
+
+    def upgrade(self, *extra):
+        return self.process([sys.executable,str(self.work/'.agents/scripts/install-gitleaks-hook.py'),
+                             '--upgrade',*extra],cwd=self.work)
+
+    def test_upgrade_replaces_only_merged_versions_from_default_branch(self):
+        new=(BASE/'.agents/scripts/pre-push-gitleaks.py').read_bytes()
+        legacy, old, foreign = (b'#!/bin/sh\nexit %d\n' % code for code in (2, 3, 4))
+        (self.work/'scripts').mkdir()
+        (self.work/'scripts/pre-push-gitleaks.py').write_bytes(legacy)
+        self.assertEqual(self.git('add','.').returncode,0)
+        self.assertEqual(self.git('commit','-qm','pre-#36 layout').returncode,0)
+        scripts=self.work/'.agents/scripts'
+        scripts.mkdir(parents=True)
+        self.assertEqual(self.git('mv','scripts/pre-push-gitleaks.py',str(scripts/'pre-push-gitleaks.py')).returncode,0)
+        (scripts/'pre-push-gitleaks.py').write_bytes(old)
+        self.assertEqual(self.git('commit','-qam','moved old hook').returncode,0)
+        (scripts/'pre-push-gitleaks.py').write_bytes(new)
+        (scripts/'install-gitleaks-hook.py').write_bytes(INSTALL.read_bytes())
+        self.assertEqual(self.git('add','.').returncode,0)
+        self.assertEqual(self.git('commit','-qm','new hook').returncode,0)
+        merged=self.git('rev-parse','HEAD').stdout.strip()
+        self.assertEqual(self.push().returncode,0)
+        hook=self.work/'.git/hooks/pre-push'
+        hook.write_bytes(foreign)
+        self.assertEqual(self.git('fetch','-q','origin').returncode,0)
+        # The receiver names main as its default branch, as a hosted remote does.
+        self.process(['git','--git-dir',str(self.remote),'symbolic-ref','HEAD','refs/heads/main'])
+        self.assertEqual(self.git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main').returncode,0)
+        # The existing hook is not a version of the default branch history.
+        self.assertNotEqual(self.upgrade().returncode,0)
+        self.assertEqual(hook.read_bytes(),foreign)
+        hook.write_bytes(old)
+        # Plain install never replaces, and no base override is accepted.
+        self.assertIn('hook install blocked',self.install().stderr)
+        self.git('config','workflow.baseBranch','main')
+        self.assertNotEqual(self.upgrade().returncode,0)
+        self.git('config','--unset','workflow.baseBranch')
+        self.assertNotEqual(self.upgrade('--remote','missing').returncode,0)
+        # A new source that is not on the default branch is refused.
+        (scripts/'pre-push-gitleaks.py').write_bytes(foreign)
+        self.assertEqual(self.git('commit','-qam','unmerged hook').returncode,0)
+        self.assertNotEqual(self.upgrade().returncode,0)
+        self.assertEqual(hook.read_bytes(),old)
+        self.assertEqual(self.git('reset','-q','--hard',merged).returncode,0)
+        # The fetched default branch must match the remote's advertised value,
+        # even when both commits carry the same hook.
+        (self.work/'data').write_text('advanced remote\n')
+        self.assertEqual(self.git('commit','-qam','advance').returncode,0)
+        hook.write_bytes(new)
+        self.assertEqual(self.push().returncode,0)
+        hook.write_bytes(old)
+        self.git('update-ref','refs/remotes/origin/main',merged)
+        self.assertNotEqual(self.upgrade().returncode,0)
+        self.assertEqual(hook.read_bytes(),old)
+        self.assertEqual(self.git('fetch','-q','origin').returncode,0)
+        for previous in (old, legacy):
+            hook.write_bytes(previous)
+            result=self.upgrade()
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(hook.read_bytes(),new)
+            self.assertTrue(os.access(hook,os.X_OK))
+        self.assertEqual(self.upgrade().returncode,0)  # Identical copy: no change.
+        # A local symref retargeted to a pushed non-default branch is refused (#85 review).
+        self.assertEqual(self.git('checkout','-q','-b','feature-x').returncode,0)
+        (scripts/'pre-push-gitleaks.py').write_bytes(foreign)
+        self.assertEqual(self.git('commit','-qam','unmerged hook on a branch').returncode,0)
+        self.assertEqual(self.push('HEAD:refs/heads/feature-x').returncode,0)
+        self.assertEqual(self.git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/feature-x').returncode,0)
+        self.assertNotEqual(self.upgrade().returncode,0)
+        self.assertEqual(hook.read_bytes(),new)
+        self.assertEqual(self.git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/main').returncode,0)
+        # A version only on a merged side branch whose merge kept the other side
+        # is still in the history (rev-list --full-history).
+        self.assertEqual(self.git('checkout','-q','--detach','origin/main').returncode,0)
+        main_tip=self.git('rev-parse','HEAD').stdout.strip()
+        side=b'#!/bin/sh\nexit 5\n'
+        (scripts/'pre-push-gitleaks.py').write_bytes(side)
+        self.assertEqual(self.git('commit','-qam','side hook').returncode,0)
+        side_commit=self.git('rev-parse','HEAD').stdout.strip()
+        tree=self.git('rev-parse',main_tip+'^{tree}').stdout.strip()
+        merge=self.git('commit-tree',tree,'-p',main_tip,'-p',side_commit,'-m','merge keeps main').stdout.strip()
+        self.assertEqual(self.git('reset','-q','--hard',merge).returncode,0)
+        self.assertEqual(self.push('HEAD:refs/heads/main').returncode,0)
+        self.assertEqual(self.git('fetch','-q','origin').returncode,0)
+        hook.write_bytes(side)
+        result=self.upgrade()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(hook.read_bytes(),new)
+
 
 if __name__=='__main__':
     unittest.main()
