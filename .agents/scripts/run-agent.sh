@@ -3,9 +3,14 @@ set -euo pipefail
 umask 077
 die() { printf 'run-agent: %s\n' "$1" >&2; exit 2; }
 
-[[ $# == 4 ]] || die 'usage: run-agent.sh <implement|review> <codex|claude> <light|standard|deep> <task-file>'
+usage='usage: run-agent.sh <implement|review> <codex|claude> <light|standard|deep> <task-file> [--worktree <worker-id> <issue> <absolute-path>]'
+[[ $# == 4 || ($# == 8 && $5 == --worktree) ]] || die "$usage"
 role="$1"; profile="$2"; tier="$3"; task_file="$4"
+assigned=()
+[[ $# == 4 ]] || assigned=("$6" "$7" "$8")
 case "$role" in implement|review) ;; *) die 'invalid role' ;; esac
+# Issue #77: an assigned Writer must start in its own worktree, not the caller's.
+[[ ${#assigned[@]} == 0 || $role == implement ]] || die '--worktree is only for implement'
 case "$profile" in codex|claude) ;; *) die 'invalid profile' ;; esac
 case "$tier" in light|standard|deep) ;; *) die 'invalid tier' ;; esac
 [[ -f "$task_file" && -r "$task_file" ]] || die 'task file unreadable'
@@ -20,7 +25,16 @@ command -v python3 >/dev/null 2>&1 || die 'python3 not found'
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 parent_pane="$(bash "$script_dir/herdr-context.sh")" || exit 2
-root="$(git rev-parse --show-toplevel 2>/dev/null)" || die 'run in a Git repository'
+if [[ ${#assigned[@]} == 3 ]]; then
+  # Checked before any state, reservation or pane; the checked path becomes the child's
+  # cwd, summary worktree and reservation worktree.
+  assignment="$(bash "$script_dir/check-worker-worktree.sh" "${assigned[@]}")" \
+    || die 'assigned worktree check failed; no child launched'
+  IFS=$'\t' read -r _ _ _ root <<<"$assignment"
+  [[ -n $root ]] || die 'assigned worktree check returned no path'
+else
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || die 'run in a Git repository'
+fi
 root="$(cd "$root" && pwd -P)" || die 'repository root is inaccessible'
 config="$script_dir/../config/models.json"
 # Fail closed before any state, reservation or pane: role/provider/tier must resolve to a
