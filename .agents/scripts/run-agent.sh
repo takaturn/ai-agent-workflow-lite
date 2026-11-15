@@ -7,6 +7,7 @@ usage='usage: run-agent.sh <implement|review> <codex|claude> <light|standard|dee
 [[ $# == 4 || ($# == 8 && $5 == --worktree) ]] || die "$usage"
 role="$1"; profile="$2"; tier="$3"; task_file="$4"
 assigned=()
+assignment_json=null
 [[ $# == 4 ]] || assigned=("$6" "$7" "$8")
 case "$role" in implement|review) ;; *) die 'invalid role' ;; esac
 # Issue #77: an assigned Writer must start in its own worktree, not the caller's.
@@ -30,12 +31,16 @@ if [[ ${#assigned[@]} == 3 ]]; then
   # cwd, summary worktree and reservation worktree.
   assignment="$(bash "$script_dir/check-worker-worktree.sh" "${assigned[@]}")" \
     || die 'assigned worktree check failed; no child launched'
-  IFS=$'\t' read -r _ _ _ root <<<"$assignment"
+  IFS=$'\t' read -r a_worker a_issue a_branch root <<<"$assignment"
   [[ -n $root ]] || die 'assigned worktree check returned no path'
+  assignment_json="$(jq -cn --arg w "$a_worker" --arg i "$a_issue" --arg b "$a_branch" '{worker:$w,issue:$i,branch:$b}')"
 else
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || die 'run in a Git repository'
+  # The omitted form is unchecked; an assigned Writer needs --worktree (Issue #77).
+  [[ $role != implement ]] || printf 'run-agent: unassigned implement launch; child cwd is the caller repository root\n' >&2
 fi
 root="$(cd "$root" && pwd -P)" || die 'repository root is inaccessible'
+caller_root="$(git rev-parse --show-toplevel 2>/dev/null)" && caller_root="$(cd "$caller_root" && pwd -P)" || caller_root=$root
 config="$script_dir/../config/models.json"
 # Fail closed before any state, reservation or pane: role/provider/tier must resolve to a
 # non-empty model and an effort listed for the provider. Never fall back to another entry.
@@ -49,10 +54,10 @@ task="$(cat -- "$task_file")"
 state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
 [[ "$state_root" = /* ]] || die 'XDG_STATE_HOME must be an absolute path'
 state_candidate="$(realpath -m -- "$state_root")" || die 'cannot resolve state path'
-case "$state_candidate/" in "$root/"*) die 'XDG_STATE_HOME must be outside the working tree' ;; esac
+case "$state_candidate/" in "$root/"*|"$caller_root/"*) die 'XDG_STATE_HOME must be outside the working tree' ;; esac
 mkdir -p -- "$state_candidate"
 state_root="$(cd "$state_candidate" && pwd -P)" || die 'cannot access state directory'
-case "$state_root/" in "$root/"*) die 'state directory resolves inside the working tree' ;; esac
+case "$state_root/" in "$root/"*|"$caller_root/"*) die 'state directory resolves inside the working tree' ;; esac
 repo_id="$(printf '%s' "$root" | sha256sum | cut -c1-16)"
 state_base="$state_root/ai-agent-workflow-lite/$repo_id"
 mkdir -p -- "$state_base"
@@ -88,13 +93,14 @@ save_summary() {
     --argjson exit_code "$code" --argjson duration_seconds "$elapsed" \
     --argjson input_tokens "$input_tokens" --argjson output_tokens "$output_tokens" --argjson token_usage "$token_usage" --argjson started_epoch "$started_epoch" \
     --argjson result_path "$result_path" --argjson result_bytes "$result_bytes" \
+    --argjson assignment "$assignment_json" \
     '{role:$role,profile:$profile,tier:$tier,model:$model,pane_id:$pane,agent_name:$agent_name,
       run_id:$run_id,parent_pane_id:$parent,worktree:$cwd,task_sha256:$task_sha256,
       task_id:$task_id,reservation_id:$reservation_id,
       phase:$phase,root_acceptance:"pending",cleanup:"retained",close_attempted:false,
       status:$status,exit_code:$exit_code,duration_seconds:$duration_seconds,
       input_tokens:$input_tokens,output_tokens:$output_tokens,token_usage:$token_usage,started_epoch:$started_epoch,
-      result_path:$result_path,result_bytes:$result_bytes}' >"$run_dir/.summary.tmp" || return 1
+      result_path:$result_path,result_bytes:$result_bytes,assignment:$assignment}' >"$run_dir/.summary.tmp" || return 1
   mv -- "$run_dir/.summary.tmp" "$run_dir/summary.json"
 }
 checkpoint() { save_summary null || die 'cannot record run checkpoint'; }

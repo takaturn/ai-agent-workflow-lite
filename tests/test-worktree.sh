@@ -31,6 +31,32 @@ reject() {
   fi
 }
 reject worker-a 4 "$tmp/missing"
+# Issue #77: herdr and claude -w layouts under the main checkout; codex --worktree is refused.
+repo_real=$(cd "$repo" && pwd -P)
+git -C "$repo" worktree add -qb feature/issue4-herd "$repo/.herdr/worktrees/feature-issue4-herd"
+test "$(check herd 4 "$repo_real/.herdr/worktrees/feature-issue4-herd" | cut -f4)" = "$repo_real/.herdr/worktrees/feature-issue4-herd"
+git -C "$repo" worktree add -qb feature/issue4-misnamed "$repo/.herdr/worktrees/other-name"
+reject misnamed 4 "$repo/.herdr/worktrees/other-name"
+grep -Fx 'worktree check: herdr worktree must be named after branch feature/issue<issue>-<worker-id>' "$tmp/rejected"
+git -C "$repo" worktree add -qb feature/issue6 "$repo/.herdr/worktrees/feature-issue6"
+reject any 6 "$repo/.herdr/worktrees/feature-issue6"
+git -C "$repo" worktree add -qb worktree-free+name "$repo/.claude/worktrees/free+name"
+reject cw 4 "$repo/.claude/worktrees/free+name"
+grep -Fx 'worktree check: branch does not match assignment' "$tmp/rejected"
+git -C "$repo/.claude/worktrees/free+name" branch -m feature/issue4-cw
+test "$(check cw 4 "$repo_real/.claude/worktrees/free+name" | cut -f3)" = feature/issue4-cw
+reject cw 5 "$repo/.claude/worktrees/free+name"
+# The legacy branch carries no Worker ID, so a claude worktree must use the qualified one.
+git -C "$repo" worktree add -qb feature/issue7 "$repo/.claude/worktrees/legacy"
+reject any 7 "$repo/.claude/worktrees/legacy"
+grep -Fx 'worktree check: claude worktree branch must be renamed to feature/issue<issue>-<worker-id>' "$tmp/rejected"
+git -C "$repo" worktree add -qb feature/issue4-nested "$repo/.claude/worktrees/x/nested"
+reject nested 4 "$repo/.claude/worktrees/x/nested"
+grep -Fx 'worktree check: expected directory issue-<issue>-<worker-id>, or a herdr/claude worktree of this repository' "$tmp/rejected"
+git -C "$repo" worktree add -q --detach "$tmp/codex-home/worktrees/082e/feature-issue4" HEAD
+reject any 4 "$tmp/codex-home/worktrees/082e/feature-issue4"
+grep -Fx 'worktree check: detached HEAD (a codex --worktree checkout cannot be assigned)' "$tmp/rejected"
+printf 'PASS: herdr/claude layouts accepted, misnamed/unrenamed/nested/codex refused\n'
 reject worker-b 5 "$one"
 reject worker-a 04 "$one"
 reject worker-a 4 "relative/path"
