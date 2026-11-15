@@ -165,7 +165,7 @@ fixture_policy "$tmp/assigned"
   >"$tmp/assigned-output" 2>"$tmp/assigned-error")
 summary_path=$(find "$tmp/assigned" -name summary.json -type f)
 jq -e --arg wt "$wt" '.status=="returned" and .worktree==$wt and .assignment=={worker:"w1",issue:"77",branch:"feature/issue77-w1"} and .result_path!=null' "$summary_path" >/dev/null
-! grep -q 'unassigned implement launch' "$tmp/assigned-error"
+if grep -q 'unassigned implement launch' "$tmp/assigned-error"; then echo 'FAIL: assigned launch warned as unassigned' >&2; exit 1; fi
 grep -q 'unassigned implement launch' "$tmp/error"
 jq -e '.assignment==null' "$summary" >/dev/null
 jq -e --arg wt "$wt" '.reservations[-1].worktree==$wt and .reservations[-1].status=="returned"' \
