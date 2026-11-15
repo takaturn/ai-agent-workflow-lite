@@ -1,13 +1,13 @@
 ---
 name: github-issue-creation
-description: Root-only procedure for creating a GitHub Issue, changing an Issue's title or labels (including creating a label), or drafting an Issue body that changes design - verify design-bearing drafts before presenting them, check the repository's label and title conventions first, pass the fixed content to the publication check, and read the result back. It grants no Issue creation, label creation or publish authority by itself.
+description: Root-only procedure for creating a GitHub Issue, changing an Issue's title or labels (including creating a label), drafting an Issue body that changes design, or naming work to be done later (another Issue, a later PR, follow-up, handoff next:) in a report, PR body, Issue comment or child handoff - re-read the current Issue body and cite sources before naming such work, verify design-bearing drafts before presenting them, check the repository's label and title conventions first, pass the fixed content to the publication check, and read the result back. It grants no Issue creation, label creation or publish authority by itself.
 ---
 
 # Issue の作成・タイトルとラベルの変更 — Root のみ
 
-Root が Issue を作るとき、Issue のタイトルやラベルを変えるとき、ラベルを作るとき、設計を含む Issue 本文の案を書くときに使う。学びの Issue 化（`wiki-knowledge` の「進め方の学び」）に限らず、どの場面でも同じ手順にする。SPEC: Issue #52。
+Root が Issue を作るとき、Issue のタイトルやラベルを変えるとき、ラベルを作るとき、設計を含む Issue 本文の案を書くとき、報告・PR 本文・Issue のコメント・子への引き継ぎで後で行う作業を挙げるときに使う。学びの Issue 化（`wiki-knowledge` の「進め方の学び」）に限らず、どの場面でも同じ手順にする。SPEC: Issue #52。
 
-この Skill を読んでも、Issue の作成・ラベルの作成・外部への書き込みの権限は増えない。各書き込みは既存の承認と AGENTS.md の公開前チェックに従う。Issue 本文だけの書き直しは、下の「案を示す前の確かめ方」だけを適用し、それ以外は既存の運用（本文は仕様であり全体を書き直す）に従う。
+この Skill を読んでも、Issue の作成・ラベルの作成・外部への書き込みの権限は増えない。各書き込みは既存の承認と AGENTS.md の公開前チェックに従う。後で行う作業を挙げる場面は、下の「後で行う作業を挙げる前の確かめ方」だけを適用する。Issue 本文だけの書き直しは、下の「案を示す前の確かめ方」だけを適用し、それ以外は既存の運用（本文は仕様であり全体を書き直す）に従う。
 
 **送る前にユーザーの承認を得る。** 作る Issue のタイトル・ラベル・本文、または変えるタイトル・ラベルと対象の Issue を示し、承認を得てから書き込む。ユーザーが内容まで指定して作成や変更を明示した場合は、その指定を承認とする。承認のあとに送る内容が変わったら、改めて承認を得る。
 
@@ -37,6 +37,32 @@ Issue の案（新しい Issue と、既存 Issue の本文の書き直し）を
 | Herdr が使えず Reviewer を起動できない | 「未検証。Reviewer の検証が欠けている（Herdr 不可）」と示して案を見せてよい。ユーザーが未検証と承知して承認したら、本文に「未検証」と書いて作成する |
 | 指摘を受けて新しい hook を加える修正 | 範囲を超えるので STOP とし、直す前にユーザーに範囲を広げてよいかを確かめる |
 | 指摘を受けてエラーの事例を1つ足す修正 | 範囲の中なので、確かめずに直す |
+
+## 後で行う作業を挙げる前の確かめ方
+
+報告・PR 本文・Issue のコメント・子への引き継ぎで、その時点で済んでいない作業を、このタスクのあとで行うものとして挙げるときに行う（「別 Issue」「別 PR で」「今後の課題」「残課題」「follow-up」、handoff の `next:` を含む）。言い回しではなく、この働きで判断する。ただし、本文の作業項目にない待ちや判定で、新しい成果物（Issue・PR・commit）を作らないもの（Reviewer の指摘の判定、CI の結果待ち、merge の承認待ちなど）を書くことは対象にしない。本文の作業項目に当たる作業は、次の工程として書くときも対象にする。SPEC: Issue #88。
+
+1. **本文を読み返す:** 挙げる前に、いまの Issue（複数ならそれぞれ）の本文を読み返し（`gh issue view` などで最新の本文を読む。記憶で代えない）、次の順で扱いを決める。取得できないときは、手元にある本文（渡された文書や会話の中の本文）を読んで扱いを決め、その取得元と時点を書く。手元にもないときだけ、本文を確かめていないことを書き、扱いを決めずに挙げる。いまの Issue がない作業では、この手順を省き、2 だけを適用する。
+   1. 本文の作業項目（成果物・受入条件・移行手順・merge 後に確かめるもの など、名前を問わない）にある、まだ済んでいない作業 → 別 Issue の候補にせず、いまの Issue の残作業として書く。Issue がすでに閉じていても同じに書き、開き直すかはユーザーに任せる。済んだ作業は済んだと書く。
+   2. 同じ作業が別の開いている Issue にある → 新しい候補にせず、その Issue を示す。別の閉じた Issue の作業項目にある場合も、その Issue を示し、開き直すかはユーザーに任せる。
+   3. 上のどれにも当たらず、本文の「対象外」に挙がった作業、または本文のどこにもない作業 → 候補として挙げてよい。
+   4. 子（Reviewer など）の報告から引き継ぐ候補 → 上と同じに扱う。
+2. **理由の出典:** AGENTS.md の区別の規定のとおり、候補の理由のうち事実として書くものには、ツールで確かめた出典（path:line、コマンドの出力、実際に読んだ文書の URL）を添える。ユーザーから聞いた事実は、そう書く。どちらでもないものは推測または「未確認」と書く。外部の文書を確かめるのは、既存の承認の範囲に限る。ツールで確かめた事実を「未確認」にしない。
+3. **案や作成とは別:** 候補を挙げることは、Issue の作成でも案の作成でもない。この節では「案を示す前の確かめ方」と「作る前に確かめること」を求めない。ユーザーが案や作成を求めたときに、それらを適用する。
+
+事例と期待する結果:
+
+| 事例 | 期待する結果 |
+| --- | --- |
+| 本文の「移行手順」にある merge 後の確認を、報告で「別 Issue の候補」にしようとする | 候補にしない。いまの Issue の残作業として書く |
+| いまの Issue はすでに閉じているが、本文の受入条件の1つが済んでいない | 閉じた Issue の残作業として書き、開き直すかはユーザーに任せる |
+| 本文の「対象外」に挙がった作業 | 候補として挙げてよい |
+| 子の handoff に `next: Root が指摘を判定する` と書く | 本文の作業項目にない判定で、新しい成果物を作らないので、この節の対象にしない |
+| 本文の移行手順にある未実施の手順を `next:` に書く | 対象にする。いまの Issue の残作業として書く |
+| 同じ作業が別の開いている Issue #NN にある | 新しい候補にせず、#NN を示す |
+| Reviewer の報告に「follow-up で直す」とある指摘 | 上と同じに、本文を読み返して扱いを決める |
+| 理由に「CLI はこの設定を読まない」と書く。`--help` の出力で確かめた | 出典（コマンドと出力の該当箇所）を添えて事実として書く。「未確認」にしない |
+| 理由に、確かめていない挙動を記憶だけで書く | 「未確認」または推測と書く。事実として書かない |
 
 ## 作る前に確かめること
 
