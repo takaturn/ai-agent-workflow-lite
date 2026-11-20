@@ -26,6 +26,7 @@ case "$1 $2" in
     ;;
   'pane split')
     inspect_phase initialized
+    [[ -z ${TEST_CAPTURE_SPLIT:-} ]] || printf '%s\n' "$@" >"$TEST_CAPTURE_SPLIT"
     ledgers=("$XDG_STATE_HOME"/ai-agent-workflow-lite/launch-gate/*/state.json)
     [[ ${#ledgers[@]} == 1 && -f ${ledgers[0]} ]]
     jq -e '.reservations[-1].status=="reserved"' "${ledgers[0]}" >/dev/null
@@ -153,6 +154,57 @@ jq -e --arg id "$reservation" '.reservations[] | select(.id==$id) | .status=="re
 name=$(jq -r '.agent_name' "$summary")
 grep -Fq "Agent target: name=$name pane=child" "$tmp/error"
 [[ -z "$(git -C "$tmp/work" status --porcelain)" ]] || { echo 'FAIL: repo dirtied' >&2; exit 1; }
+
+# Issue #77: an assigned Writer launched from Root's worktree starts in the assigned one.
+git -C "$tmp/work" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m base
+git -C "$tmp/work" worktree add -q -b feature/issue77-w1 "$tmp/issue-77-w1"
+wt=$(cd "$tmp/issue-77-w1" && pwd -P)
+fixture_policy "$tmp/assigned"
+(cd "$tmp/work" && XDG_STATE_HOME="$tmp/assigned" TEST_ROOT="$wt" TEST_CAPTURE_SPLIT="$tmp/assigned-split" TEST_CODEX_SESSION=1 \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" --worktree w1 77 "$wt" \
+  >"$tmp/assigned-output" 2>"$tmp/assigned-error")
+summary_path=$(find "$tmp/assigned" -name summary.json -type f)
+jq -e --arg wt "$wt" '.status=="returned" and .worktree==$wt and .assignment=={worker:"w1",issue:"77",branch:"feature/issue77-w1"} and .result_path!=null' "$summary_path" >/dev/null
+if grep -q 'unassigned implement launch' "$tmp/assigned-error"; then echo 'FAIL: assigned launch warned as unassigned' >&2; exit 1; fi
+grep -q 'unassigned implement launch' "$tmp/error"
+jq -e '.assignment==null' "$summary" >/dev/null
+jq -e --arg wt "$wt" '.reservations[-1].worktree==$wt and .reservations[-1].status=="returned"' \
+  "$tmp/assigned/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json" >/dev/null
+[[ $(sed -n '/^--cwd$/{n;p}' "$tmp/assigned-split") == "$wt" ]] || { echo 'FAIL: child cwd is not the assigned worktree' >&2; exit 1; }
+grep -Fq "cwd=$wt summary=" "$tmp/assigned-error"
+# State inside the caller's (Root's) tree stays refused when the child runs elsewhere.
+if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/work/state" \
+  bash "$base/.agents/scripts/run-agent.sh" implement codex light "$tmp/task.txt" --worktree w1 77 "$wt" >/dev/null 2>"$tmp/inside-error"); then
+  echo 'FAIL: state inside the caller tree accepted' >&2; exit 1
+fi
+grep -q 'must be outside the working tree' "$tmp/inside-error"
+# Wrong assignment, dirty worktree, another repository, or a non-Writer role: no reservation, no pane.
+git init -q "$tmp/issue-77-other"
+git -C "$tmp/issue-77-other" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m other
+git -C "$tmp/issue-77-other" checkout -q -b feature/issue77-other
+for refused in wrong-id dirty other-repo review; do
+  role=implement id=w1 path=$wt
+  case $refused in
+    wrong-id) id=w2 reason='branch does not match assignment' ;;
+    dirty) touch "$wt/stray"; reason='worktree is dirty' ;;
+    other-repo) id=other path=$tmp/issue-77-other reason='target belongs to a different repository' ;;
+    review) role=review reason='--worktree is only for implement' ;;
+  esac
+  # Approved state, so only the assignment check stands between the call and a launch.
+  fixture_policy "$tmp/assigned-$refused"
+  : >"$tmp/refused-actions"
+  if (cd "$tmp/work" && XDG_STATE_HOME="$tmp/assigned-$refused" TEST_ACTIONS="$tmp/refused-actions" \
+    bash "$base/.agents/scripts/run-agent.sh" $role codex light "$tmp/task.txt" --worktree "$id" 77 "$path" \
+    >/dev/null 2>"$tmp/refused-error"); then
+    echo "FAIL: $refused assignment accepted" >&2; exit 1
+  fi
+  ! grep -Eq '^(pane split|agent start)' "$tmp/refused-actions" \
+    && [[ -z $(find "$tmp/assigned-$refused/ai-agent-workflow-lite" -name 'run.*') ]] \
+    && ! jq -e '.reservations|length>0' "$tmp/assigned-$refused/ai-agent-workflow-lite/launch-gate/$LAUNCH_TASK_ID/state.json" >/dev/null 2>&1 \
+    || { echo "FAIL: $refused assignment reserved, recorded or launched" >&2; exit 1; }
+  grep -Fq -- "$reason" "$tmp/refused-error" || { echo "FAIL: $refused reason" >&2; exit 1; }
+  rm -f "$wt/stray"
+done
 
 # Herdr reports an unseen completion as done, which is also ready for input.
 (cd "$tmp/work" && TEST_AGENT_STATUS=done \

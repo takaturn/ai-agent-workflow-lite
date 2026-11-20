@@ -31,7 +31,8 @@ for i in 0 1; do
   (
     set +e
     cd "${paths[i]}" || exit 2
-    bash "$base/run-agent.sh" implement "$profile" "${tiers[i]}" "${tasks[i]}" 2>&1 |
+    bash "$base/run-agent.sh" implement "$profile" "${tiers[i]}" "${tasks[i]}" \
+      --worktree "${ids[i]}" "${issues[i]}" "${paths[i]}" 2>&1 |
       {
         output_rc=0
         while IFS= read -r line || [[ -n $line ]]; do

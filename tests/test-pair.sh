@@ -18,6 +18,7 @@ cat >"$tmp/.agents/scripts/run-agent.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 id=$(basename "$PWD")
+printf '%s\n' "$@" >"$TEST_DIR/$id.argv"
 touch "$TEST_DIR/$id.started"
 for ((n=0;n<100;n++)); do
   [[ -e "$TEST_DIR/a.started" && -e "$TEST_DIR/b.started" ]] && break
@@ -36,6 +37,8 @@ export TEST_DIR="$tmp" LAUNCH_TASK_ID=pair-fixture
 run() { bash "$tmp/.agents/scripts/run-pair.sh" codex a 51 "$tmp/a" light "$tmp/task" b 51 "$tmp/b" light "$tmp/task"; }
 run >"$tmp/out" 2>"$tmp/err"
 [[ -f "$tmp/a.finished" && -f "$tmp/b.finished" ]]
+# Issue #77: each runner re-checks its own assignment through --worktree.
+[[ $(sed -n '5,8p' "$tmp/a.argv" | paste -sd' ') == "--worktree a 51 $tmp/a" ]] || { echo 'FAIL: pair did not pass --worktree' >&2; exit 1; }
 # Concurrent output must remain attributable even when completion order changes.
 grep -q '^\[a issue=51\] result-a$' "$tmp/out"
 grep -q '^\[b issue=51\] result-b$' "$tmp/out"
