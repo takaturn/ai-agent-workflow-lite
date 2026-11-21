@@ -23,7 +23,8 @@ from pathlib import Path
 log = Path(os.environ["FAKE_LOG"])
 mode = Path(os.environ["FAKE_MODE"]).read_text().strip() if Path(os.environ["FAKE_MODE"]).exists() else "ok"
 entry = {"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": sys.stdin.read(),
-         "claudecode": "CLAUDECODE" in os.environ, "pid": os.getpid()}
+         "claudecode": "CLAUDECODE" in os.environ, "pid": os.getpid(),
+         "mode": oct(os.stat(".").st_mode & 0o777), "agents_mode": oct(os.stat("AGENTS.md").st_mode & 0o777)}
 with log.open("a") as f:
     f.write(json.dumps(entry) + "\n")
 if mode == "sleep":
@@ -53,7 +54,7 @@ class EvalRunTest(unittest.TestCase):
         self.mode = base / "mode"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", XDG_STATE_HOME=str(base / "state"),
                         FAKE_LOG=str(self.log), FAKE_MODE=str(self.mode), CLAUDECODE="1",
-                        TMPDIR=str(base / "marker-issue95-session"))
+                        TMPDIR=str(base / "marker-issue95-session"), EVAL_RUN_MANAGED_DIR=str(base / "managed"))
         (base / "marker-issue95-session").mkdir()
         self.worktree = str(ROOT)
         self.src = base / "src"
@@ -151,6 +152,8 @@ class EvalRunTest(unittest.TestCase):
                 self.assertNotIn(name, entry["cwd"])
             # A fixed neutral base, not TMPDIR (which may name the session).
             self.assertEqual(str(Path(entry["cwd"]).parent), "/tmp")
+            # The copy stays private although the arm has ordinary 0755/0644 modes.
+            self.assertEqual((entry["mode"], entry["agents_mode"]), ("0o700", "0o600"))
             self.assertFalse(Path(entry["cwd"]).exists())
             self.assertEqual(entry["argv"][:1], ["-p"])
             for flag in ("--restricted", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--verbose"):
@@ -210,6 +213,11 @@ class EvalRunTest(unittest.TestCase):
 
     def test_launch_gate_required(self):
         self.call("init", "--design", self.design())
+        managed = Path(self.env["EVAL_RUN_MANAGED_DIR"]) / "managed-settings.d"
+        managed.mkdir(parents=True)
+        (managed / "50-org.json").write_text(json.dumps({"hooks": {"PreToolUse": []}, "x": 1}))
+        self.assertIn("managed settings define hooks", self.trial("R1", "baseline", ok=False).stderr)
+        (managed / "50-org.json").write_text(json.dumps({"permissions": {}}))
         self.assertIn("launch-gate refused", self.trial("R1", "baseline", ok=False).stderr)
         self.approve(1, path="run-agent")
         self.assertIn("launch-gate refused", self.trial("R1", "baseline", ok=False).stderr)
@@ -325,8 +333,12 @@ class EvalRunTest(unittest.TestCase):
         self.assertIn("another eval-run.py command", self.call("list", ok=False).stderr)
         proc.send_signal(signal.SIGKILL)
         proc.wait()
-        os.kill(self.launches()[0]["pid"], signal.SIGKILL)
-        st = self.status()
+        pid = self.launches()[0]["pid"]
+        st = self.status()  # the next command stops the orphaned subject before recording
+        deadline = time.time() + 10
+        while Path(f"/proc/{pid}").exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(Path(f"/proc/{pid}").exists() and b"claude" in Path(f"/proc/{pid}/cmdline").read_bytes())
         self.assertEqual(st["invalid"][0]["code"], "interrupted")
         gate = subprocess.run(["python3", str(GATE), "--task-id", self.task, "--worktree", self.worktree, "status"],
                               env=self.env, text=True, capture_output=True, check=True)

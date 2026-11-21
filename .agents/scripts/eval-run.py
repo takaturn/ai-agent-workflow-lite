@@ -34,6 +34,37 @@ FLAGS = ["--restricted", "--safe-mode", "--strict-mcp-config", "--permission-mod
          "--no-session-persistence", "--output-format", "stream-json", "--verbose",
          "--tools", "Read", "Glob", "Grep"]
 GATE = Path(__file__).resolve().parent / "launch-gate.py"
+# --restricted and --safe-mode still apply managed (policy) settings and their hooks.
+# Linux file locations; server-delivered or other platforms' managed settings are not checked.
+MANAGED = Path(os.environ.get("EVAL_RUN_MANAGED_DIR", "/etc/claude-code"))
+
+
+def managed_hooks():
+    """Return managed settings files that define hooks (subjects would not be hook-free)."""
+    found = []
+    candidates = [MANAGED / "managed-settings.json"]
+    if (MANAGED / "managed-settings.d").is_dir():
+        candidates += sorted((MANAGED / "managed-settings.d").glob("*.json"))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            found.append(str(path) + " (unreadable)")
+            continue
+        if isinstance(data, dict) and data.get("hooks"):
+            found.append(str(path))
+    return found
+
+
+def subject_alive(pid):
+    """True if pid is still a claude subject process (guards against pid reuse)."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return any(Path(arg.decode(errors="replace")).name == "claude" for arg in cmdline[:2])
 
 
 def fail(message):
@@ -159,6 +190,14 @@ class Task:
                     state["trials"].remove(trial)
                     changed = True
                 elif trial["status"] == "running":
+                    # The subject runs in its own session and can outlive a killed parent: stop it first.
+                    pid = trial.get("pid")
+                    if pid and subject_alive(pid):
+                        try:
+                            os.killpg(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        trial["orphan_stopped"] = True
                     trial.update(status="interrupted", verdict="invalid", code="interrupted",
                                  reason="eval-run.py ended before the trial finished", scored_at=now())
                     self.finish(trial, "interrupted")
@@ -352,6 +391,10 @@ def cmd_trial(task, args):
     arm_dir = cdir / "arms" / args.arm
     if digest(tree_hashes(arm_dir)) != case["arms"][args.arm]["sha256"]:
         fail("arm files changed after init")
+    hooks = managed_hooks()
+    if hooks:
+        fail("managed settings define hooks, which apply even with --restricted --safe-mode: "
+             + ", ".join(hooks) + "; run trials on a host without them")
     trials_dir = task.run_dir(args.run) / "trials"
     trials_dir.mkdir(exist_ok=True)
     # The id never reuses a directory left by an earlier failed attempt.
@@ -383,6 +426,11 @@ def cmd_trial(task, args):
         # An unnamed copy in a fixed neutral temp base: no case/arm/session names in the path.
         work = Path(tempfile.mkdtemp(dir=WORK_BASE))
         shutil.copytree(arm_dir, work, dirs_exist_ok=True, symlinks=True)
+        # copytree copies the arm's modes onto the 0700 mkdtemp directory; keep the copy private.
+        for dirpath, dirnames, filenames in os.walk(work):
+            os.chmod(dirpath, 0o700)
+            for name in filenames:
+                os.chmod(Path(dirpath) / name, 0o600)
         before = tree_hashes(work)
     except OSError as error:
         if work:
@@ -401,6 +449,8 @@ def cmd_trial(task, args):
             except OSError as error:
                 shutil.rmtree(work, ignore_errors=True)
                 abandon(f"subject did not start: {error}")
+            trial["pid"] = proc.pid
+            task.save(state)
             try:
                 code = proc.wait(timeout=TRIAL_TIMEOUT)
                 outcome = "returned" if code == 0 else "failed"
