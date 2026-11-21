@@ -46,13 +46,14 @@ cd <作業ディレクトリ>
 npm_config_ignore_scripts=true npx -y -p textlint@15.8.0 -p @textlint-ja/textlint-rule-preset-ai-writing@1.7.0 -p textlint-rule-preset-ja-technical-writing@12.0.2 textlint --config <リポジトリ>/.agents/config/textlintrc.json -f json -o <作業ディレクトリ>/textlint-result.json <作業ディレクトリ>/<写し>.md
 ```
 
-1. 作業ディレクトリは、リポジトリと Wiki の clone の外に `mktemp -d` で作る。Claude Code では scratchpad の中に `mktemp -d -p <scratchpad>` で作り、scratchpad そのものは使わない。
-2. 検査が終わったら、写しと `textlint-result.json` を作業ディレクトリごと消す。消すのは自分が `mktemp -d` で作ったディレクトリだけとする。npx のキャッシュは次の検査で使うので残す。
-3. 直接指定する3つのバージョンは固定する。上げるときは、この Skill を変える PR で行う。
-4. 推移的な依存は固定されない。これは受け入れたリスクで、安全とはいえない。
-5. `npm_config_ignore_scripts=true` で、取得したパッケージのインストール時のスクリプトを止める。
-6. 実行には npm registry からの取得が要り、取得したコードをローカルで動かす。これは外部へのアクセスなので、`AGENTS.md` の承認の規定（外部アクセスには承認が要る）のとおり、承認を得てから実行する。承認の範囲はユーザーが決め、この Skill は定めない。
-7. 承認を求めるときは、コマンド、3つのバージョン、コードを取得してローカルで動かすことを1行で示す。キャッシュがあって取得が起きない実行にも承認が要るかは、ユーザーが承認の範囲として決める。
+1. 作業ディレクトリは、リポジトリと Wiki の clone の外に `mktemp -d` で作る。Claude Code では、scratchpad の下の場所を名前の型で指定して作る（`mktemp -d "<scratchpad>/textlint.XXXXXX"`）。macOS の `mktemp` は、`TMPDIR` があると `-p` を使わないため。scratchpad そのものは使わない。
+2. 上のコマンドの `<…>` を、空白を含むパスに置き換えるときは、パスごとに引用符で囲む。
+3. 検査が終わったら、写しと `textlint-result.json` を作業ディレクトリごと消す。消すのは自分が `mktemp -d` で作ったディレクトリだけとする。npx のキャッシュは次の検査で使うので残す。
+4. 直接指定する3つのバージョンは固定する。上げるときは、この Skill を変える PR で行う。
+5. 推移的な依存は固定されない。これは受け入れたリスクで、安全とはいえない。
+6. `npm_config_ignore_scripts=true` で、取得したパッケージのインストール時のスクリプトを止める。
+7. 実行には npm registry からの取得が要り、取得したコードをローカルで動かす。これは外部へのアクセスなので、`AGENTS.md` の承認の規定（外部アクセスには承認が要る）のとおり、承認を得てから実行する。承認の範囲はユーザーが決め、この Skill は定めない。
+8. 承認を求めるときは、コマンド、3つのバージョン、コードを取得してローカルで動かすことを1行で示す。キャッシュがあって取得が起きない実行にも承認が要るかは、ユーザーが承認の範囲として決める。
 
 ## 何を検査するか
 
@@ -66,13 +67,13 @@ npm_config_ignore_scripts=true npx -y -p textlint@15.8.0 -p @textlint-ja/textlin
 | リポジトリの `.md` | 変えたファイルを丸ごと写す（行番号を変えない） | `git diff -U0 HEAD -- <ファイル>` の `+` 側の行の指摘だけ。Git がまだ追跡していないファイルはすべて |
 | Wiki のページ | 同じく丸ごと写す | Wiki の clone での `git diff -U0 HEAD -- <ファイル>` の `+` 側の行の指摘だけ。新しいページはすべて |
 | コードのコメント | 下の「コメントの取り出し方」のとおり | すべて |
-| commit message | 最後の message をファイルに書き、`git commit -F <ファイル>` で commit する。そのファイルを写す。`--amend` でも同じ | すべて（英語だけの trailer は除く） |
+| commit message | 最後の message をファイルに書き、そのファイルを写して検査する。直してから、同じファイルで `git commit -F <ファイル>` する。`--amend` でも同じ | すべて（英語だけの trailer は除く） |
 
 指摘が変えた行に入るかは、指摘の開始行（JSON の `line`）が `+` 側の行にあるかで決める。
 
 コメントの取り出し方は、できる範囲で行う。
 
-1. `git diff -U0 HEAD` の `+` 側の行から、日本語を含むコメントを探す。
+1. `git diff -U0 HEAD` の `+` 側の行から、日本語を含むコメントを探す。Git がまだ追跡していないファイルは差分に出ないので、ファイル全体から探す（`git ls-files --others --exclude-standard` で一覧を出す）。
 2. `#` や `//` などのコメント記号は外す。続いた行のコメントは1つの段落にまとめる。
 3. 段落の前に `<!-- path:line -->` を付けて、写しに書き出す。
 4. 文字列のリテラルは対象にしない。
