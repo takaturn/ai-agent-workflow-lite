@@ -27,6 +27,7 @@ ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}\Z")
 TRIAL_TIMEOUT = 480
 GATE_TIMEOUT = 30
+WORK_BASE = "/tmp" if os.path.isdir("/tmp") else None
 RERUN_MAX = 5
 RECORD = "Record this per orchestrate SKILL.md Routing 6 (the baseline did not reproduce; stop the comparison)."
 FLAGS = ["--restricted", "--safe-mode", "--strict-mcp-config", "--permission-mode", "dontAsk",
@@ -125,24 +126,44 @@ class Task:
         write_atomic(self.run_dir(state["run"]) / "state.json", state)
 
     def gate(self, *args):
-        return subprocess.run(["python3", str(GATE), "--task-id", self.task_id, "--worktree", str(self.worktree), *args],
-                              text=True, capture_output=True, timeout=GATE_TIMEOUT, stdin=subprocess.DEVNULL)
+        """Run launch-gate; a timeout becomes a failed result instead of an exception."""
+        command = ["python3", str(GATE), "--task-id", self.task_id, "--worktree", str(self.worktree), *args]
+        try:
+            return subprocess.run(command, text=True, capture_output=True, timeout=GATE_TIMEOUT, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(command, 124, "", "launch-gate timed out")
+
+    def finish(self, trial, outcome):
+        result = self.gate("finish", "--reservation-id", trial["reservation_id"], "--outcome", outcome)
+        if result.returncode != 0:
+            trial["finish_error"] = result.stderr.strip()[:500]
 
     def recover(self):
-        """Turn trials left 'running' by a killed command into invalid (interrupted)."""
+        """Settle trials left by a killed command.
+
+        'reserving': killed around reserve; finish any reservation it got and drop the record.
+        'running': killed while the subject ran; the trial becomes invalid (interrupted).
+        """
+        reserved = None
         for name in self.runs():
             state = self.load(name)
             changed = False
-            for trial in state["trials"]:
-                if trial["status"] != "running":
-                    continue
-                trial.update(status="interrupted", verdict="invalid", code="interrupted",
-                             reason="eval-run.py ended before the trial finished", scored_at=now())
-                result = self.gate("finish", "--reservation-id", trial["reservation_id"], "--outcome", "interrupted")
-                if result.returncode != 0:
-                    trial["finish_error"] = result.stderr.strip()[:500]
-                changed = True
-                print(f"recovered interrupted trial {name}/{trial['id']}", file=sys.stderr)
+            for trial in list(state["trials"]):
+                if trial["status"] == "reserving":
+                    if reserved is None:
+                        result = self.gate("status")
+                        reserved = json.loads(result.stdout).get("reservations", []) if result.returncode == 0 else []
+                    for item in reserved:
+                        if item.get("run_id") == trial["run_id"] and item.get("status") == "reserved":
+                            self.finish(dict(trial, reservation_id=item["id"]), "prelaunch_error")
+                    state["trials"].remove(trial)
+                    changed = True
+                elif trial["status"] == "running":
+                    trial.update(status="interrupted", verdict="invalid", code="interrupted",
+                                 reason="eval-run.py ended before the trial finished", scored_at=now())
+                    self.finish(trial, "interrupted")
+                    changed = True
+                    print(f"recovered interrupted trial {name}/{trial['id']}", file=sys.stderr)
             if changed:
                 self.save(state)
 
@@ -263,6 +284,8 @@ def repro_state(state, cid):
     need = case["repro_failures"]
     if c["fail"] >= need:
         return "reproduced"
+    if any(t["case"] == cid and t["arm"] == "baseline" and "verdict" not in t for t in state["trials"]):
+        return "pending"
     valid_left = case["trials"] - c["pass"] - c["fail"]
     launches_left = case["trials"] + state["invalid_rerun_limit"] - c["launched"]
     if c["fail"] + valid_left < need:
@@ -273,7 +296,7 @@ def repro_state(state, cid):
 
 
 def parse_stream(path):
-    tools, result = [], None
+    tools, by_id, result = [], {}, None
     for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             item = json.loads(line)
@@ -281,13 +304,28 @@ def parse_stream(path):
             continue
         if not isinstance(item, dict):
             continue
-        if item.get("type") == "assistant":
-            for block in (item.get("message") or {}).get("content") or []:
+        content = (item.get("message") or {}).get("content") if isinstance(item.get("message"), dict) else None
+        if item.get("type") == "assistant" and isinstance(content, list):
+            for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
-                    tools.append({"name": block.get("name"), "input": block.get("input")})
+                    entry = {"name": block.get("name"), "input": block.get("input"), "is_error": None}
+                    tools.append(entry)
+                    by_id[block.get("id")] = entry
+        elif item.get("type") == "user" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
+                    by_id[block["tool_use_id"]]["is_error"] = bool(block.get("is_error"))
         elif item.get("type") == "result":
             result = item
     return tools, result
+
+
+class Interrupted(BaseException):
+    pass
+
+
+def on_signal(signum, frame):
+    raise Interrupted(signal.Signals(signum).name)
 
 
 def cmd_trial(task, args):
@@ -314,52 +352,79 @@ def cmd_trial(task, args):
     arm_dir = cdir / "arms" / args.arm
     if digest(tree_hashes(arm_dir)) != case["arms"][args.arm]["sha256"]:
         fail("arm files changed after init")
-    trial_id = f"t{len(state['trials']) + 1:03d}"
-    reserved = task.gate("reserve", "--provider", "claude", "--model", state["model"], "--path", "run-eval",
-                         "--run-id", f"{args.run}-{trial_id}")
-    if reserved.returncode != 0:
-        fail("launch-gate refused; no subject launched: " + reserved.stderr.strip())
-    reservation = reserved.stdout.strip()
-    tdir = task.run_dir(args.run) / "trials" / trial_id
-    trial = {"id": trial_id, "case": args.case, "arm": args.arm, "reservation_id": reservation,
-             "started_at": now(), "status": "running"}
-    work = None
-    try:
-        tdir.mkdir(parents=True)
-        state["trials"].append(trial)
-        task.save(state)
-        # An unnamed copy in the system temp dir: no case/arm names, no records nearby.
-        work = Path(tempfile.mkdtemp())
-        shutil.copytree(arm_dir, work, dirs_exist_ok=True, symlinks=True)
-        before = tree_hashes(work)
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        command = ["claude", "-p", *FLAGS, "--model", state["model"]]
-    except BaseException:
-        if work:
-            shutil.rmtree(work, ignore_errors=True)
+    trials_dir = task.run_dir(args.run) / "trials"
+    trials_dir.mkdir(exist_ok=True)
+    # The id never reuses a directory left by an earlier failed attempt.
+    used = {t["id"] for t in state["trials"]} | {p.name for p in trials_dir.iterdir()}
+    trial_id = next(f"t{n:03d}" for n in range(1, 10000) if f"t{n:03d}" not in used)
+    tdir = trials_dir / trial_id
+    tdir.mkdir()
+    # A placeholder before reserving lets recover() return a slot reserved by a killed command.
+    trial = {"id": trial_id, "case": args.case, "arm": args.arm, "run_id": f"{args.run}-{trial_id}",
+             "started_at": now(), "status": "reserving"}
+    state["trials"].append(trial)
+    task.save(state)
+
+    def abandon(message):
         state["trials"].remove(trial)
         task.save(state)
-        task.gate("finish", "--reservation-id", reservation, "--outcome", "prelaunch_error")
-        raise
-    started = time.monotonic()
-    with open(cdir / "prompt.txt", "rb") as stdin, open(tdir / "stream.jsonl", "wb") as out, \
-            open(tdir / "stderr.txt", "wb") as err:
-        try:
-            proc = subprocess.Popen(command, cwd=work, env=env, stdin=stdin, stdout=out, stderr=err,
-                                    start_new_session=True)
-        except OSError as error:
+        if trial.get("reservation_id"):
+            task.finish(trial, "prelaunch_error")
+        fail(message)
+
+    reserved = task.gate("reserve", "--provider", "claude", "--model", state["model"], "--path", "run-eval",
+                         "--run-id", trial["run_id"])
+    if reserved.returncode != 0:
+        abandon("launch-gate refused; no subject launched: " + reserved.stderr.strip())
+    trial.update(reservation_id=reserved.stdout.strip(), status="running")
+    task.save(state)
+    work = None
+    try:
+        # An unnamed copy in a fixed neutral temp base: no case/arm/session names in the path.
+        work = Path(tempfile.mkdtemp(dir=WORK_BASE))
+        shutil.copytree(arm_dir, work, dirs_exist_ok=True, symlinks=True)
+        before = tree_hashes(work)
+    except OSError as error:
+        if work:
             shutil.rmtree(work, ignore_errors=True)
-            state["trials"].remove(trial)
-            task.save(state)
-            task.gate("finish", "--reservation-id", reservation, "--outcome", "prelaunch_error")
-            fail(f"subject did not start: {error}")
-        try:
-            code = proc.wait(timeout=TRIAL_TIMEOUT)
-            outcome = "returned" if code == 0 else "failed"
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            code = proc.wait()
-            outcome = "timed_out"
+        abandon(f"could not prepare the subject's directory: {error}")
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    command = ["claude", "-p", *FLAGS, "--model", state["model"]]
+    started = time.monotonic()
+    previous = {s: signal.signal(s, on_signal) for s in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        with open(cdir / "prompt.txt", "rb") as stdin, open(tdir / "stream.jsonl", "wb") as out, \
+                open(tdir / "stderr.txt", "wb") as err:
+            try:
+                proc = subprocess.Popen(command, cwd=work, env=env, stdin=stdin, stdout=out, stderr=err,
+                                        start_new_session=True)
+            except OSError as error:
+                shutil.rmtree(work, ignore_errors=True)
+                abandon(f"subject did not start: {error}")
+            try:
+                code = proc.wait(timeout=TRIAL_TIMEOUT)
+                outcome = "returned" if code == 0 else "failed"
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                code = proc.wait()
+                outcome = "timed_out"
+            except BaseException as error:
+                # Ctrl-C, SIGTERM or SIGHUP: stop the subject, record the trial as interrupted, re-raise.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+                shutil.rmtree(work, ignore_errors=True)
+                trial.update(status="interrupted", verdict="invalid", code="interrupted",
+                             reason=f"eval-run.py was interrupted ({error.__class__.__name__})", scored_at=now())
+                task.save(state)
+                task.finish(trial, "interrupted")
+                task.save(state)
+                raise
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
     seconds = round(time.monotonic() - started, 1)
     try:
         changed = tree_hashes(work) != before
@@ -369,11 +434,11 @@ def cmd_trial(task, args):
     tools, result = parse_stream(tdir / "stream.jsonl")
     ok = (outcome == "returned" and result is not None and result.get("is_error") is False
           and result.get("subtype") == "success")
+    # Save the outcome before returning the slot, so a failure there cannot turn it into "interrupted".
     trial.update(status=outcome, exit_code=code, seconds=seconds, completed=ok, workdir_changed=changed,
                  tools=tools, result_subtype=(result or {}).get("subtype"), finished_at=now())
-    finished = task.gate("finish", "--reservation-id", reservation, "--outcome", "returned" if outcome == "returned" else "failed")
-    if finished.returncode != 0:
-        trial["finish_error"] = finished.stderr.strip()[:500]
+    task.save(state)
+    task.finish(trial, "returned" if outcome == "returned" else "failed")
     task.save(state)
     print(json.dumps({"trial": trial_id, "case": args.case, "arm": args.arm, "status": outcome,
                       "completed": ok, "workdir_changed": changed, "seconds": seconds,
@@ -449,6 +514,9 @@ def main():
     except (ValueError, OSError, json.JSONDecodeError, UnicodeError, subprocess.TimeoutExpired) as error:
         print("eval-run: " + str(error), file=sys.stderr)
         return 2
+    except (Interrupted, KeyboardInterrupt) as error:
+        print(f"eval-run: interrupted ({error.__class__.__name__}); the trial is recorded as interrupted", file=sys.stderr)
+        return 130
     return 0
 
 

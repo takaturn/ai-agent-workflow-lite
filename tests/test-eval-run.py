@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -31,7 +32,9 @@ if mode == "write":
     Path("written.txt").write_text("x")
 print(json.dumps({"type": "system", "subtype": "init", "tools": ["Read"]}))
 print(json.dumps({"type": "assistant", "message": {"content": [
-    {"type": "tool_use", "name": "Read", "input": {"file_path": "AGENTS.md"}}]}}))
+    {"type": "tool_use", "id": "tu1", "name": "Read", "input": {"file_path": "AGENTS.md"}}]}}))
+print(json.dumps({"type": "user", "message": {"content": [
+    {"type": "tool_result", "tool_use_id": "tu1", "is_error": mode == "readerr", "content": "x"}]}}))
 if mode != "noresult":
     print(json.dumps({"type": "result", "subtype": "error_max_turns" if mode == "subtype" else "success", "is_error": mode == "iserror", "result": "answer"}))
 sys.exit(3 if mode == "exit" else 0)
@@ -49,7 +52,9 @@ class EvalRunTest(unittest.TestCase):
         self.log = base / "claude.log"
         self.mode = base / "mode"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", XDG_STATE_HOME=str(base / "state"),
-                        FAKE_LOG=str(self.log), FAKE_MODE=str(self.mode), CLAUDECODE="1")
+                        FAKE_LOG=str(self.log), FAKE_MODE=str(self.mode), CLAUDECODE="1",
+                        TMPDIR=str(base / "marker-issue95-session"))
+        (base / "marker-issue95-session").mkdir()
         self.worktree = str(ROOT)
         self.src = base / "src"
         for arm in ("baseline", "a", "b", "c"):
@@ -115,7 +120,7 @@ class EvalRunTest(unittest.TestCase):
         self.assertEqual(self.launches(), [])
         shown = json.loads(self.trial("R1", "baseline").stdout)
         self.assertEqual(shown["criterion"], "reads AGENTS.md")
-        self.assertEqual(shown["tools"], [{"name": "Read", "input": {"file_path": "AGENTS.md"}}])
+        self.assertEqual(shown["tools"], [{"name": "Read", "input": {"file_path": "AGENTS.md"}, "is_error": False}])
         self.assertEqual(shown["status"], "returned")
         self.assertFalse(shown["workdir_changed"])
         # An unscored trial blocks the next launch.
@@ -133,7 +138,7 @@ class EvalRunTest(unittest.TestCase):
         self.score("t003", "pass")
         self.trial("C1", "a")
         self.score("t004", "fail")
-        self.trial("C1", "a", ok=False)  # planned count reached
+        self.assertIn("planned valid trials", self.trial("C1", "a", ok=False).stderr)
         self.assertEqual(len(self.launches()), 4)  # #77 actually launched 10
         st = self.status()
         self.assertEqual(st["cases"]["R1"]["repro"], "not_reproduced")
@@ -142,9 +147,10 @@ class EvalRunTest(unittest.TestCase):
         # How the subject was launched.
         for entry in self.launches():
             self.assertFalse(entry["claudecode"])
-            for name in ("baseline", "R1", "C1", "evaltask", "state"):
+            for name in ("baseline", "R1", "C1", "evaltask", "state", "marker"):
                 self.assertNotIn(name, entry["cwd"])
-            self.assertTrue(entry["cwd"].startswith(tempfile.gettempdir()))
+            # A fixed neutral base, not TMPDIR (which may name the session).
+            self.assertEqual(str(Path(entry["cwd"]).parent), "/tmp")
             self.assertFalse(Path(entry["cwd"]).exists())
             self.assertEqual(entry["argv"][:1], ["-p"])
             for flag in ("--restricted", "--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--verbose"):
@@ -177,7 +183,9 @@ class EvalRunTest(unittest.TestCase):
                 self.score(trial, "invalid")
             else:
                 break
-        self.assertEqual(json.loads(self.call("status", "--run", "r").stdout)["unscored"], ["t003"])
+        st = self.status()
+        self.assertEqual(st["unscored"], ["t003"])
+        self.assertEqual(st["cases"]["R1"]["repro"], "pending")  # not decided while a trial is unscored
         self.score("t003", "invalid")
         # trials 2 + limit 1 = 3 launches used with no valid result: undetermined.
         st = self.status()
@@ -220,6 +228,9 @@ class EvalRunTest(unittest.TestCase):
         link_arm = self.src / "linkarm"
         link_arm.mkdir()
         (link_arm / "x").symlink_to(self.src / "r1.txt")
+        dir_link_arm = self.src / "dirlinkarm"
+        dir_link_arm.mkdir()
+        (dir_link_arm / "d").symlink_to(self.src / "a", target_is_directory=True)
         case = lambda **kw: [dict({"id": "R1", "kind": "repro", "prompt": str(self.src / "r1.txt"), "criterion": "c",
                                    "arms": {"baseline": str(self.src / "baseline")}, "trials": 1, "repro_failures": 1}, **kw)]
         bad.append(self.design(run="nocrit", cases=case(criterion=" ")))
@@ -227,6 +238,7 @@ class EvalRunTest(unittest.TestCase):
         bad.append(self.design(run="bang", cases=case(prompt=str(self.src / "bang.txt"))))
         bad.append(self.design(run="git", cases=case(arms={"baseline": str(git_arm)})))
         bad.append(self.design(run="link", cases=case(arms={"baseline": str(link_arm)})))
+        bad.append(self.design(run="dirlink", cases=case(arms={"baseline": str(dir_link_arm)})))
         bad.append(self.design(run="inwt", cases=case(arms={"baseline": str(ROOT / "tests")})))
         bad.append(self.design(run="nobase", cases=case(arms={"a": str(self.src / "a")})))
         bad.append(self.design(run="../up"))
@@ -252,6 +264,52 @@ class EvalRunTest(unittest.TestCase):
         self.assertIn("earlier runs: r", self.call("init", "--design", self.design(run="r2")).stdout)
         self.assertEqual(self.status("r2")["earlier_runs"], ["r"])
         self.assertEqual([l.split("\t")[0] for l in self.call("list").stdout.splitlines()], ["r", "r2"])
+
+    def test_prelaunch_failure_returns_slot_and_retry_works(self):
+        self.approve(3)
+        self.call("init", "--design", self.design())
+        # No claude anywhere on PATH (only python3), so the real CLI can never start here.
+        nobin = Path(self.tmp.name) / "nobin"
+        nobin.mkdir()
+        (nobin / "python3").symlink_to(Path(sys.executable).resolve())
+        saved = self.env
+        self.env = dict(saved, PATH=str(nobin))
+        self.assertIn("subject did not start", self.trial("R1", "baseline", ok=False).stderr)
+        self.env = saved
+        self.assertEqual(self.status()["unscored"], [])
+        shown = json.loads(self.trial("R1", "baseline").stdout)
+        self.assertEqual(shown["trial"], "t002")
+        gate = subprocess.run(["python3", str(GATE), "--task-id", self.task, "--worktree", self.worktree, "status"],
+                              env=self.env, text=True, capture_output=True, check=True)
+        self.assertEqual([r["status"] for r in json.loads(gate.stdout)["reservations"]], ["prelaunch_error", "returned"])
+
+    def start_sleeping_trial(self):
+        self.approve(20)
+        self.call("init", "--design", self.design())
+        self.mode.write_text("sleep")
+        proc = subprocess.Popen(["python3", str(EVAL), "--task-id", self.task, "--worktree", self.worktree,
+                                 "trial", "--run", "r", "--case", "R1", "--arm", "baseline"], env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + 20
+        while not self.launches() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.launches())
+        return proc
+
+    def gate_statuses(self):
+        gate = subprocess.run(["python3", str(GATE), "--task-id", self.task, "--worktree", self.worktree, "status"],
+                              env=self.env, text=True, capture_output=True, check=True)
+        return [r["status"] for r in json.loads(gate.stdout)["reservations"]]
+
+    def test_sigterm_stops_subject_and_records_interrupted(self):
+        proc = self.start_sleeping_trial()
+        proc.send_signal(signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=20), 130)
+        pid = self.launches()[0]["pid"]
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        self.assertEqual(self.status()["invalid"][0]["code"], "interrupted")
+        self.assertEqual(self.gate_statuses(), ["interrupted"])
 
     def test_kill_is_recovered_and_commands_do_not_overlap(self):
         self.approve(20)
