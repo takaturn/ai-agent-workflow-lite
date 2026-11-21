@@ -73,7 +73,7 @@ bash .agents/scripts/run-agent.sh implement claude light /tmp/ai-work-demo.txt
 
 ## タスク単位の起動ゲート（Issue #16）
 
-`LAUNCH_TASK_ID` は明示必須です。run名、Pane、worktree、再開に依存しない同じIDを同じ承認済みタスクの全実行で使ってください。別タスクとは重複しないIDにします。`XDG_STATE_HOME` も全worktreeで共通のGit管理外ディレクトリに固定します。policyと予約は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-gate/<task-id>/state.json` に保存され、ユーザー専用のlockで排他的に更新されます。単位は **予約された子CLI起動枠1回** です。Pane作成の前に枠を予約するため、Pane作成失敗も枠を消費します。
+`LAUNCH_TASK_ID` は明示必須です。run名、Pane、worktree、再開に依存しない同じIDを同じ承認済みタスクの全実行で使ってください。別タスクとは重複しないIDにします。`XDG_STATE_HOME` も全worktreeで共通のGit管理外ディレクトリに固定します。policyと予約は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/launch-gate/<task-id>/state.json` に保存され、ユーザー専用のlockで排他的に更新されます。単位は **予約された起動枠1回**（Herdr の子CLI、または `eval-run.py` の評価の試行1回）です。状態ファイルの `unit` の値は互換のため `reserved child launch slots` のまま変えません。Pane作成の前に枠を予約するため、Pane作成失敗も枠を消費します。
 
 `approve` は既に得たユーザーの明示承認を `--approval-ref` で**申告して記録する**コマンドです。ツールは会話上の承認を証明しません。初回作成、上限追加、provider/model/経路の追加にはそれぞれ新しい明示承認が必要です。承認履歴は追記され、既存の予約は減りません。`--approval-ref` はタスク内で一意な承認イベントIDとして扱います。同じ参照・同じ内容の再登録はno-opで、上限到達や明示停止も解除しません。同じ参照で内容を変更した再登録は拒否し、別途承認された追加枠には新しい参照を使います。各予約は承認レコードに紐付き、異なるprovider/model向けの枠を流用しません。許可済みの残枠内なら毎回の再承認は不要です。provider/modelは実際の `.agents/config/models.json` の選択値と一致させ、予約経路は共通の `run-agent` を指定します（`run-pair.sh` もこのrunnerを呼びます）。例えば追加承認後は `--additional-launches 2 --paths run-agent` で履歴を追記します。承認済みの組み合わせ以外、policy不在、状態不正、明示停止は起動を拒否します。
 
@@ -92,13 +92,26 @@ python3 tests/test-launch-gate.py
 - **コマンド:** `launch-gate.py --task-id "$LAUNCH_TASK_ID" --worktree "$PWD" show-plan --plan <絶対パス>` で表示し、`... approve-plan --plan <絶対パス> --confirm <SHA-256先頭8文字>` で記録します。`--worktree` は既存コマンドと同じく現在のworktreeの絶対パスです。
 - **確認の記録:** 状態ファイルと同じタスクディレクトリの `plan-confirmations.jsonl` に、1行1件のJSON（`plan_sha256`・`confirmed_at`・`source`・`approval_refs`）で追記します。
 
-計画の形式は `{"task_id": "<task-id>", "launches": [{"provider": "...", "model": "...", "count": N}]}` です。同じ内容を別の承認として追加するときは、任意の `label`（英数字・`_`・`-`）を変えます。経路は常に `run-agent` です。provider/modelは英数字と `._:/+-` だけを受け付け、端末制御文字で表示を偽装できないようにします。`show-plan` は状態ディレクトリも作らず何も書かずに、正規化した計画・SHA-256・組ごとの回数と合計を表示します。`approve-plan` は計画ファイルを1回だけ読み、そのバイト列のSHA-256の先頭8文字が `--confirm` と一致した場合だけ記録します。表示後に計画が差し替えられていれば、先頭8文字（32ビット）が偶然一致しない限り記録されません。一致した場合は、1つのlockの中で全組を検証して状態ファイルへ1回だけ書き込み、1組でも失敗すれば何も書きません。承認参照は `<SHA-256先頭16文字>-<組の番号>` なので、同じ計画を再記録しても二重に数えません。確認記録にあるSHA-256の計画は再利用できません（計画ファイル自体は移動・削除しません）。確認記録は状態ファイルより先に開き、開けなければ何も記録しません。状態の保存後・確認記録の追記完了前に異常終了した場合は、同じ計画を再実行すると枠は増えず、確認記録だけが補われます（途中で切れた末尾行は無視します）。1計画の合計は20回までです。状態ファイルの形式と承認レコードの項目は変わりません。
+計画の形式は `{"task_id": "<task-id>", "launches": [{"provider": "...", "model": "...", "count": N, "path": "run-eval"}]}` です。`path` は行ごとに `run-agent` か `run-eval` を書け、省くと `run-agent` です（Issue #95）。`show-plan` は行ごとの経路を表示します。経路ごとに承認を数えるため、`run-eval` だけを書いた承認で `run-agent` は予約できません（`approve --paths run-agent run-eval` の承認は両方に使えます）。同じ内容を別の承認として追加するときは、任意の `label`（英数字・`_`・`-`）を変えます。provider/modelは英数字と `._:/+-` だけを受け付け、端末制御文字で表示を偽装できないようにします。`show-plan` は状態ディレクトリを作らず、何も書かずに、正規化した計画・SHA-256・組ごとの回数と合計を表示します。`approve-plan` は計画ファイルを1回だけ読み、そのバイト列のSHA-256の先頭8文字が `--confirm` と一致した場合だけ記録します。表示後に計画が差し替えられていれば、先頭8文字（32ビット）が偶然一致しない限り記録されません。一致した場合は、1つのlockの中で全組を検証して状態ファイルへ1回だけ書き込み、1組でも失敗すれば何も書きません。承認参照は `<SHA-256先頭16文字>-<組の番号>` なので、同じ計画を再記録しても二重に数えません。確認記録にあるSHA-256の計画は再利用できません（計画ファイル自体は移動・削除しません）。確認記録は状態ファイルより先に開き、開けなければ何も記録しません。状態の保存後・確認記録の追記完了前に異常終了した場合は、同じ計画を再実行します。枠は増えず、確認記録だけが補われます（途中で切れた末尾行は無視します）。1計画の合計は20回までです。状態ファイルの形式と承認レコードの項目は変わりません。
 
-Rootは `approve-plan` を自分で実行しません。Rootが計画を書き、ユーザーがプロンプト欄で `! ... show-plan ...` を実行して表示されたモデルと回数を読み、納得した場合だけ `! ... approve-plan ... --confirm <8文字>` を実行します。`--confirm` は表示を見たことの申告であり、本人の確認を証明しません。これは公開前チェックと同じ**協調的な運用ゲート**であり、同じユーザー・同じマシンでAIが同じコマンドや状態ファイルの直接編集で承認を記録することを強制的には防げません。承認の取り消しは今と同じくタスク全体の `stop` だけです。
+Rootは `approve-plan` を自分で実行しません（評価の試行の `run-eval` の承認も同じです）。Rootが計画を書きます。ユーザーはプロンプト欄で `! ... show-plan ...` を実行し、表示されたモデルと回数を読みます。納得した場合だけ `! ... approve-plan ... --confirm <8文字>` を実行します。`--confirm` は表示を見たことの申告であり、本人の確認を証明しません。これは公開前チェックと同じ**協調的な運用ゲート**です。同じユーザー・同じマシンでAIが同じコマンドや状態ファイルの直接編集で承認を記録することを強制的には防げません。承認の取り消しは今と同じくタスク全体の `stop` だけです。
 
 各予約は `reserved` から `returned` / `failed` / `interrupted` / `prelaunch_error` に更新されます。強制終了などで `reserved` のままでも消費済みとして数え、自動返却や自動retryはしません。上限到達と明示停止は `stop.reason=limit_reached|explicit_stop` として残し、#15が参照できます。追加承認は上限到達だけを解除し、明示停止を解除しません。この停止状態は新規起動の拒否であり、稼働中の子を停止した証拠ではありません。子の所有者、実効停止能力、停止結果は別途確認してください。`LAUNCH_PATH` による経路の自己申告は受け付けません。使用量と単価は `unknown` のままであり、請求確定額や絶対的な課金上限を保証しません。
 
 対象はこの `run-agent.sh` のCodex/Claude起動と、これを使う `run-pair.sh` です。後者では両worktreeで同じ `LAUNCH_TASK_ID` と `XDG_STATE_HOME` を渡し、policyに共通の `run-agent` 経路を許可してください。直接の `codex` / `claude` / `herdr agent start`、他のrunner、Root自身の推論、稼働中エージェントへの追加promptはこのゲートを通りません。policy/stateの手動編集や異なるstate homeの利用も防げないため、Rootが実際の割当とIDを照合します。モデルなしテストは予約動作の確認であり、実機AI起動や請求の検証ではありません。
+
+### 評価の試行（Issue #95）
+
+振る舞いの評価の試行は `.agents/scripts/eval-run.py` からだけ起動します。使い方、強制すること、被験に見せるもの、起動の規則での位置づけ、限界は orchestrate の Routing 6「Running trials」にあります。要点は次のとおりです。
+
+- `init --design <Git外の絶対パス>` で設計を1回だけ固定し、`trial`、`score`、`status`、`list` で進めます。状態は `${XDG_STATE_HOME:-$HOME/.local/state}/ai-agent-workflow-lite/eval-run/<task-id>/` に置きます。
+- `trial` は1回ごとに `launch-gate reserve --path run-eval` で枠を予約します。1回は480秒で打ち切るので、Claude Code の Bash の tool では `timeout` を `600000` にして実行します。
+- 再現ケースでは、`baseline` が再現するまでほかの版を起動しません。被験は常に `claude -p --restricted --safe-mode`（`Read`/`Glob`/`Grep` のみ）で起動します。CLAUDE.md・Skill・hook は読み込まれません（Issue #95、Claude Code 2.1.330 で2回実測。版は検査しません）。
+- 古い `launch-gate.py` は `run-eval` の承認を含む状態ファイルを読むと検査で止まります。同じ検査を使う Root 終了ゲート（`root-exit-check.py`）も止まります。古い branch の worktree で同じタスクを続けるときは、先に main を取り込んでください。
+
+```bash
+python3 tests/test-eval-run.py
+```
 
 ## 開始・結果回収・受入・片付け
 

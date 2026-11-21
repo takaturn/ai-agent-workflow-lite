@@ -13,8 +13,10 @@ import tempfile
 from datetime import datetime, timezone
 from uuid import uuid4
 
+# Stored in every state header and checked on read, so the text stays fixed;
+# a slot covers Herdr children (run-agent) and eval-run.py trials (run-eval).
 UNIT = "reserved child launch slots"
-PATHS = ("run-agent",)
+PATHS = ("run-agent", "run-eval")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 PLAN_LIMIT = 20
 PLAN_MAX_BYTES = 65536
@@ -192,15 +194,18 @@ def read_plan(path, worktree, task_id):
         fail("plan launches must be a non-empty list")
     seen = set()
     for item in launches:
-        if not isinstance(item, dict) or set(item) != {"provider", "model", "count"}:
-            fail("plan launch must contain exactly provider, model, count")
+        if not isinstance(item, dict) or not {"provider", "model", "count"} <= set(item) <= {"provider", "model", "count", "path"}:
+            fail("plan launch must contain provider, model, count and optionally path")
+        if item.setdefault("path", "run-agent") not in PATHS:
+            fail("invalid plan path")
         if not all(isinstance(item[k], str) and NAME.fullmatch(item[k]) for k in ("provider", "model")):
             fail("invalid plan provider/model")
         if type(item["count"]) is not int or item["count"] <= 0:
             fail("plan count must be a positive integer")
-        if (item["provider"], item["model"]) in seen:
-            fail("duplicate provider/model in plan")
-        seen.add((item["provider"], item["model"]))
+        key = (item["provider"], item["model"], item["path"])
+        if key in seen:
+            fail("duplicate provider/model/path in plan")
+        seen.add(key)
     total = sum(item["count"] for item in launches)
     if total > PLAN_LIMIT:
         fail(f"plan total {total} exceeds limit {PLAN_LIMIT}")
@@ -212,7 +217,7 @@ def show_plan(plan, digest, total):
     print(json.dumps(plan, indent=2, sort_keys=True))
     print("plan sha256: " + digest)
     for item in plan["launches"]:
-        print(f"  >> {item['provider']} / {item['model']}: {item['count']} launches (path run-agent)")
+        print(f"  >> {item['provider']} / {item['model']}: {item['count']} launches (path {item['path']})")
     print(f"  >> TOTAL: {total} launches for task {plan['task_id']}")
     print("To record after reading the plan above, run:  --confirm " + digest[:8])
 
@@ -315,12 +320,12 @@ def run(args):
                 previous = next((a for a in data["approvals"] if a["reference"] == reference), None)
                 if previous is not None:
                     if (previous["provider"] != item["provider"] or previous["model"] != item["model"] or
-                            previous["paths"] != ["run-agent"] or
+                            previous["paths"] != [item["path"]] or
                             previous["additional_launches"] != item["count"]):
                         fail("approval reference already exists with different parameters; nothing recorded")
                     continue
                 data["approvals"].append({"at": now(), "reference": reference,
-                    "provider": item["provider"], "model": item["model"], "paths": ["run-agent"],
+                    "provider": item["provider"], "model": item["model"], "paths": [item["path"]],
                     "additional_launches": item["count"]})
                 added += item["count"]
             if log_file.is_symlink():
