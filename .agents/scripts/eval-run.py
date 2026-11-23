@@ -58,13 +58,17 @@ def managed_hooks():
     return found
 
 
-def subject_alive(pid):
-    """True if pid is still a claude subject process (guards against pid reuse)."""
+def subject_alive(pid, token):
+    """True if pid is still this trial's subject: its environment carries the trial's token.
+
+    The environment survives exec chains (npm, mise or shell wrappers) and a reused pid
+    (after a reboot, or another claude session) does not carry the token.
+    """
     try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
     except OSError:
         return False
-    return any(Path(arg.decode(errors="replace")).name == "claude" for arg in cmdline[:2])
+    return f"EVAL_RUN_TRIAL={token}".encode() in environ
 
 
 def fail(message):
@@ -191,13 +195,17 @@ class Task:
                     changed = True
                 elif trial["status"] == "running":
                     # The subject runs in its own session and can outlive a killed parent: stop it first.
-                    pid = trial.get("pid")
-                    if pid and subject_alive(pid):
+                    pid, token = trial.get("pid"), trial.get("token")
+                    if pid and token and subject_alive(pid, token):
                         try:
                             os.killpg(pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        trial["orphan_stopped"] = True
+                            trial["orphan_stopped"] = True
+                        except OSError as error:
+                            trial["orphan_stop_error"] = str(error)
+                    work = trial.get("work")
+                    if work and Path(work).parent == Path(WORK_BASE or tempfile.gettempdir()) \
+                            and "orphan_stop_error" not in trial:
+                        shutil.rmtree(work, ignore_errors=True)
                     trial.update(status="interrupted", verdict="invalid", code="interrupted",
                                  reason="eval-run.py ended before the trial finished", scored_at=now())
                     self.finish(trial, "interrupted")
@@ -404,7 +412,7 @@ def cmd_trial(task, args):
     tdir.mkdir()
     # A placeholder before reserving lets recover() return a slot reserved by a killed command.
     trial = {"id": trial_id, "case": args.case, "arm": args.arm, "run_id": f"{args.run}-{trial_id}",
-             "started_at": now(), "status": "reserving"}
+             "started_at": now(), "status": "reserving", "token": uuid4().hex}
     state["trials"].append(trial)
     task.save(state)
 
@@ -430,13 +438,17 @@ def cmd_trial(task, args):
         for dirpath, dirnames, filenames in os.walk(work):
             os.chmod(dirpath, 0o700)
             for name in filenames:
-                os.chmod(Path(dirpath) / name, 0o600)
+                if not (Path(dirpath) / name).is_symlink():  # never chmod through a link
+                    os.chmod(Path(dirpath) / name, 0o600)
         before = tree_hashes(work)
+        trial["work"] = str(work)  # lets recover() remove the copy after a SIGKILL
+        task.save(state)
     except OSError as error:
         if work:
             shutil.rmtree(work, ignore_errors=True)
         abandon(f"could not prepare the subject's directory: {error}")
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    env["EVAL_RUN_TRIAL"] = trial["token"]
     command = ["claude", "-p", *FLAGS, "--model", state["model"]]
     started = time.monotonic()
     previous = {s: signal.signal(s, on_signal) for s in (signal.SIGTERM, signal.SIGHUP)}
@@ -449,9 +461,10 @@ def cmd_trial(task, args):
             except OSError as error:
                 shutil.rmtree(work, ignore_errors=True)
                 abandon(f"subject did not start: {error}")
-            trial["pid"] = proc.pid
-            task.save(state)
             try:
+                # Inside the try: a signal during this save still stops the subject.
+                trial["pid"] = proc.pid
+                task.save(state)
                 code = proc.wait(timeout=TRIAL_TIMEOUT)
                 outcome = "returned" if code == 0 else "failed"
             except subprocess.TimeoutExpired:

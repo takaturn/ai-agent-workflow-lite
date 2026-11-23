@@ -326,20 +326,41 @@ class EvalRunTest(unittest.TestCase):
         proc = subprocess.Popen(["python3", str(EVAL), "--task-id", self.task, "--worktree", self.worktree,
                                  "trial", "--run", "r", "--case", "R1", "--arm", "baseline"], env=self.env,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        state_file = Path(self.env["XDG_STATE_HOME"]) / "ai-agent-workflow-lite/eval-run/evaltask/r/state.json"
         deadline = time.time() + 20
-        while not self.launches() and time.time() < deadline:
+        # Wait until eval-run.py saved the pid (the fake logs before that).
+        while not (self.launches() and json.loads(state_file.read_text())["trials"][-1].get("pid")) \
+                and time.time() < deadline:
             time.sleep(0.05)
-        self.assertTrue(self.launches())
+        saved = json.loads(state_file.read_text())["trials"][-1]
+        self.assertEqual(saved["pid"], self.launches()[0]["pid"])
+        self.assertTrue(Path(saved["work"]).is_dir())
         self.assertIn("another eval-run.py command", self.call("list", ok=False).stderr)
-        proc.send_signal(signal.SIGKILL)
-        proc.wait()
-        pid = self.launches()[0]["pid"]
-        st = self.status()  # the next command stops the orphaned subject before recording
-        deadline = time.time() + 10
-        while Path(f"/proc/{pid}").exists() and time.time() < deadline:
-            time.sleep(0.05)
-        self.assertFalse(Path(f"/proc/{pid}").exists() and b"claude" in Path(f"/proc/{pid}/cmdline").read_bytes())
-        self.assertEqual(st["invalid"][0]["code"], "interrupted")
+        # A process with the pid's name but without the trial's token is not the subject.
+        decoy_mode = Path(self.tmp.name) / "decoy-mode"
+        decoy_mode.write_text("sleep")
+        decoy = subprocess.Popen([str(self.bin / "claude"), "-p"],
+                                 env=dict(self.env, FAKE_MODE=str(decoy_mode), FAKE_LOG=str(Path(self.tmp.name) / "decoy.log")),
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 cwd=self.src / "baseline", start_new_session=True)
+        try:
+            proc.send_signal(signal.SIGKILL)
+            proc.wait()
+            pid = saved["pid"]
+            st = self.status()  # the next command stops the orphaned subject before recording
+            deadline = time.time() + 10
+            while Path(f"/proc/{pid}").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(Path(f"/proc/{pid}/environ").exists()
+                             and saved["token"].encode() in Path(f"/proc/{pid}/environ").read_bytes())
+            self.assertFalse(Path(saved["work"]).exists())
+            self.assertEqual(st["invalid"][0]["code"], "interrupted")
+            trial = json.loads(state_file.read_text())["trials"][-1]
+            self.assertTrue(trial["orphan_stopped"])
+            self.assertIsNone(decoy.poll())  # an unrelated claude keeps running
+        finally:
+            decoy.kill()
+            decoy.wait()
         gate = subprocess.run(["python3", str(GATE), "--task-id", self.task, "--worktree", self.worktree, "status"],
                               env=self.env, text=True, capture_output=True, check=True)
         self.assertEqual(json.loads(gate.stdout)["reservations"][0]["status"], "interrupted")
