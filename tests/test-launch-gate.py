@@ -186,6 +186,8 @@ class LaunchGateTest(unittest.TestCase):
         self.assertIn(digest, result.stdout)
         self.assertIn("--confirm " + digest[:8], result.stdout)
         self.assertIn("TOTAL: 3", result.stdout)
+        # A plan line without path keeps the run-agent path.
+        self.assertIn("fixture-model: 2 launches (path run-agent)", result.stdout)
         self.assertFalse((Path(self.tmp.name) / "ai-agent-workflow-lite/launch-gate/plan/state.json").exists())
         for wrong in ("00000000", digest, ""):
             code, output = self.approve_plan("plan", plan, answer=wrong)
@@ -205,12 +207,15 @@ class LaunchGateTest(unittest.TestCase):
         # An interrupted append (no trailing newline) does not block completing the record.
         log.write_text(log.read_text() + '{"plan_sha256": "trunc')
         self.assertIn("already used", self.approve_plan("plan", plan, answer=digest[:8])[1])
-        # Same pairs under a new label are a distinct plan and add allowance.
+        # Same pairs under a new label are a distinct plan and add allowance;
+        # a line may name the run-eval path, which show-plan displays.
         plan2 = Path(self.tmp.name) / "plans/plan2.json"
         raw2 = json.dumps({"task_id": "plan", "label": "second", "launches": [
-            {"provider": "fixture-provider", "model": "fixture-model", "count": 1}]}).encode()
+            {"provider": "fixture-provider", "model": "fixture-model", "count": 1},
+            {"provider": "fixture-provider", "model": "fixture-model", "count": 1, "path": "run-eval"}]}).encode()
         plan2.write_bytes(raw2)
         plan2.chmod(0o600)
+        self.assertIn("fixture-model: 1 launches (path run-eval)", self.approve_plan("plan", plan2).stdout)
         self.assertEqual(self.approve_plan("plan", plan2, answer=hashlib.sha256(raw2).hexdigest()[:8])[0], 0)
         # Recording plan2 dropped the truncated tail, so later plan operations still parse the log.
         self.assertNotIn("trunc", log.read_text())
@@ -220,11 +225,16 @@ class LaunchGateTest(unittest.TestCase):
         log.unlink()
         code, output = self.approve_plan("plan", plan, answer=digest[:8])
         self.assertEqual(code, 0, output)
-        self.assertEqual(len(self.status("plan")["approvals"]), 3)
+        approvals = self.status("plan")["approvals"]
+        self.assertEqual(len(approvals), 4)
+        self.assertEqual(approvals[-1]["paths"], ["run-eval"])
         self.reserve("plan", "one")
         self.reserve("plan", "two")
         self.reserve("plan", "three")
+        # The run-eval approval cannot be spent on a run-agent launch, nor twice.
         self.reserve("plan", "four", ok=False)
+        self.reserve("plan", "eval-one", path="run-eval")
+        self.reserve("plan", "eval-two", path="run-eval", ok=False)
         self.reserve("plan", "second", model="second-model")
 
     def test_plan_partial_conflict_and_limit_write_nothing(self):
