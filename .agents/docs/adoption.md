@@ -14,7 +14,7 @@
 | `.agents/` | 必須 | `.agents/skills` などに既存資産があれば、同名ファイルを上書きせず差分を確認してマージする |
 | `AGENTS.md` | 必須 | 既存の記述を残し、本リポジトリの規則を追記してマージする |
 | `CLAUDE.md` | Claude Code利用時 | 既存の記述を残し、`AGENTS.md` を参照する1行を追記する |
-| `.claude/settings.json` | Claude Code利用時 | `hooks.PreToolUse` 配列へ `matcher: "Agent"` の委譲手段hookのentryを追加してマージする。既存のhookは削除しない。委譲手段hookは `$CLAUDE_PROJECT_DIR/.agents/skills/orchestrate/scripts/` を実行し、`sh`、`timeout`、`python3` が必要（ないとAgentの呼び出しが毎回確認になる）。`dontAsk` のセッションではAgentを拒否する |
+| `.claude/settings.json` | Claude Code利用時 | `hooks.PreToolUse` 配列へ `matcher: "Agent"` の委譲手段hookのentryを追加してマージする。既存のhookは削除しない。委譲手段hookは `$CLAUDE_PROJECT_DIR/.agents/skills/orchestrate/scripts/` を実行し、`sh`、`timeout`、`python3` が必要（ないとAgentの呼び出しが毎回確認になる）。`dontAsk` のセッションではAgentを拒否する。学びの確認hookは `matcher: "Agent|Bash"` の別のentryとして追加する（`.agents/docs/lesson-gate.md`）。`python3` が必要で、ないときは何も確かめずに起動が続く |
 | `.claude/skills/` | Claude Code利用時 | `.agents/skills/` へのsymlink。同名のskillがあれば上書きせず停止して判断する |
 | `.github/ISSUE_TEMPLATE/` | 任意 | 既存テンプレートがあれば上書きしない |
 | `.github/workflows/test.yml` | コピーしない | 本リポジトリの `tests/` を実行するCIのため |
