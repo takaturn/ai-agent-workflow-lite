@@ -21,6 +21,17 @@
             "statusMessage": "Checking delegation method"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.agents/scripts/lesson-gate.py\"; [ -f \"$f\" ] && python3 -B \"$f\" hook; exit 0",
+            "timeout": 10,
+            "statusMessage": "Checking lessons before launch"
+          }
+        ]
       }
     ]
   }

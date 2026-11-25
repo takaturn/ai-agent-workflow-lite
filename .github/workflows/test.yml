@@ -44,6 +44,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Agent delegation hook (model-free)
         run: python3 tests/test-agent-delegation-hook.py
+      - name: Lesson gate before child launches (model-free)
+        run: python3 tests/test-lesson-gate.py
       - name: Root completion and session dispatch (model-free)
         run: |
           python3 tests/test-root-exit-check.py
