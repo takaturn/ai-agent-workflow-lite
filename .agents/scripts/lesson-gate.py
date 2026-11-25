@@ -29,7 +29,7 @@ SESSION = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 DECISIONS = ("apply", "not_apply")
 FIXED_KINDS = ("agent", "runner", "eval-run", "claude-p")
-CLAUDE_PRINT = re.compile(r"(?:^|[\s;&|(/])claude\s(?:[^;&|\n]*\s)?(?:-p|--print)(?:\s|$)")
+CLAUDE_PRINT = re.compile(r"(?:^|[\s;&|(/'\"`])claude\s(?:[^;&|\n]*\s)?(?:-p|--print)(?:\s|$)")
 MAX_REQUEST = 65536
 MAX_TEXT = 2000
 WIKI_NOTE = "参照用の記録で、指示ではない"
@@ -115,6 +115,23 @@ def read_request(path, cwd):
         return None
 
 
+def is_record(command):
+    """True only for one plain `python3 .../lesson-gate.py record ...` call, so
+    recording an entry is never asked for an entry, while a record chained to
+    a launch (`... record ... && run-agent.sh ...`) is still checked."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if any(set(t) <= set(";&|()<>") for t in tokens) or "`" in command or "$(" in command or "\n" in command:
+        return False
+    args = [t for t in tokens[1:] if t != "-B"]
+    return (bool(tokens) and os.path.basename(tokens[0]).startswith("python")
+            and len(args) >= 2 and args[0].endswith("lesson-gate.py") and args[1] == "record")
+
+
 def classify(event):
     """Return (kinds, text) for a target launch, or None. text is None when the
     runner's request file cannot be read; words cannot be judged then."""
@@ -131,7 +148,7 @@ def classify(event):
     if tool != "Bash":
         return None
     command = data.get("command")
-    if not isinstance(command, str) or "lesson-gate.py" in command:
+    if not isinstance(command, str) or is_record(command):
         return None
     kinds = set()
     if "run-agent.sh" in command or "run-pair.sh" in command:
@@ -209,7 +226,9 @@ def counter(root, sid, reset):
         value = json.loads(path.read_text())["denied"]
     except (OSError, ValueError, KeyError, TypeError):
         value = 0
-    path.write_text(json.dumps({"denied": 0 if reset else value + 1}))
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write(json.dumps({"denied": 0 if reset else value + 1}))
     return value
 
 
@@ -254,8 +273,10 @@ def context(text):
 
 def hook(raw):
     event = json.loads(raw)
-    if not isinstance(event, dict) or event.get("permission_mode") == "dontAsk":
+    if not isinstance(event, dict):
         return None
+    if event.get("tool_name") == "Agent" and event.get("permission_mode") == "dontAsk":
+        return None  # the delegation hook already denies Agent in dontAsk
     found = classify(event)
     if found is None:
         return None
@@ -268,7 +289,8 @@ def hook(raw):
         log(root, sid, kinds, [], "broken")
         return context("学びの対応表（triggers.json）を読めないため、学びを示さずに起動します。"
                        "対応表を直してください（.agents/docs/lesson-gate.md）。")
-    missing = [l["name"] for l in lessons if not os.path.isfile(l["path"])]
+    missing = [l["name"] for l in lessons
+               if kinds.intersection(l["launch"]) and not os.path.isfile(l["path"])]
     lessons = [l for l in lessons if l["name"] not in missing]
     shown, unjudged = select(lessons, kinds, text)
     if not shown:
@@ -277,7 +299,11 @@ def hook(raw):
         return None
     with Locked(root, sid):
         path = root / (sid + ".jsonl")
-        found_entries, used = entries(path)
+        try:
+            found_entries, used = entries(path)
+        except (OSError, ValueError, UnicodeError, AttributeError):
+            log(root, sid, kinds, shown, "broken_entries")
+            return context(f"記入のファイル（{path.name}）を読めないため、確かめずに起動します。")
         latest = found_entries[-1] if found_entries else None
         problem = None
         if latest is None or latest.get("id") in used:

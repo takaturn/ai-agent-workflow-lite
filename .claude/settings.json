@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.agents/scripts/lesson-gate.py\" hook",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.agents/scripts/lesson-gate.py\"; [ -f \"$f\" ] && python3 -B \"$f\" hook; exit 0",
             "timeout": 10,
             "statusMessage": "Checking lessons before launch"
           }
