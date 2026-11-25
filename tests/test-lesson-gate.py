@@ -172,7 +172,8 @@ def main():
                      "launch": ["eval-run", "claude-p"]}])
         assert "eval-design-first" in denied(e.hook("Bash", command="python3 .agents/scripts/eval-run.py start x"))
         assert "eval-design-first" in denied(e.hook("Bash", command="cd /x && claude -p hi", session="s2"))
-        for i, command in enumerate(("claude --print hi", "bash -c 'claude -p hi'", 'sh -c "claude -p hi"')):
+        for i, command in enumerate(("claude --print hi", "bash -c 'claude -p hi'", 'sh -c "claude -p hi"',
+                                     "claude -p 'review .agents/scripts/lesson-gate.py'")):
             assert "eval-design-first" in denied(e.hook("Bash", command=command, session=f"q{i}")), command
         # A corrupt entry file fails open, tells Root and is logged.
         (e.lessons / "q0.jsonl").write_text("{broken\n")
